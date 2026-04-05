@@ -25,7 +25,7 @@ LOG_CHANNEL_ID      = 713166766229946418
 ROSTER_CHANNEL_ID   = 840695680288423976
 WELCOME_CHANNEL_ID  = 703334167655612547
 VISITOR_ROLE_NAME   = "visiteur"
-VISITOR_ROLE_ID     = 711600545592377384  # ID exact du rôle visiteur
+VISITOR_ROLE_ID     = 703339804225699952  # ID exact du rôle visiteur
 
 # ── Anti-alt / Anti-raid ──────────────────────────────────────
 ALT_MIN_DAYS      = 30          # compte < 30 jours = suspect
@@ -73,6 +73,7 @@ EXEMPT_COMMANDS = {
     "classement", "top", "leaderboard",
     "giveaway", "gw",
     "pub",
+    "say", "fermer",
     "help", "aide", "commandes",
     "info",
 }
@@ -470,6 +471,7 @@ async def fermer(ctx):
     if "ticket-" not in ctx.channel.name:
         await ctx.send("❌ Uniquement dans un ticket.", delete_after=5)
         return
+    # Accessible à tous les membres dans un ticket
     view  = FermerView(closer=ctx.author)
     embed = discord.Embed(title="🔒 Fermer le ticket", description="Es-tu sûr ?\n\n⏳ Expiration dans **30s**…", color=0xFF0000)
     embed.set_footer(text="Aucune action = ticket conservé")
@@ -671,6 +673,27 @@ async def pub_cmd(ctx):
     )
     msg = await ctx.send(texte)
     await msg.reply("N'hésite pas à partager la faction et contribuer à la montée de la Mystic 🐦‍🔥")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  COMMANDE !say
+# ═══════════════════════════════════════════════════════════════
+@bot.command(name="say")
+async def say_cmd(ctx, channel: discord.TextChannel = None, *, message: str = None):
+    if not is_staff(ctx.author):
+        await ctx.send("❌ Réservé aux Officiers et Leaders.", delete_after=5)
+        return
+    if channel is None or message is None:
+        await ctx.send("❌ Utilisation : `!say #salon message`", delete_after=8)
+        return
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    try:
+        await channel.send(message)
+    except discord.Forbidden:
+        await ctx.send(f"❌ Je n'ai pas la permission d'envoyer dans {channel.mention}.", delete_after=6)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1782,14 +1805,15 @@ async def help_cmd(ctx):
     embed.add_field(name="━━━━━━━━━━━━━━━━━━\n👤 Commandes générales",
         value="`!info @membre` — Infos d'un membre\n`!level` — Ton niveau XP\n`!classement` — Top 10\n`!help` — Ce message", inline=False)
     embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🎫 Tickets",
-        value="`!ticket` 🔒 — Panneau tickets\n`!fermer` — Ferme le ticket", inline=False)
+        value="`!ticket` 🔒 — Panneau tickets\n`!fermer` — Ferme le ticket (accessible à tous dans un ticket)", inline=False)
     embed.add_field(name="━━━━━━━━━━━━━━━━━━\n📋 Roster",
         value="`!roster` 🔒 — Met à jour le roster", inline=False)
     if staff:
         embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🔨 Modération 🔒",
             value=("`!ban @membre [raison]` — Bannit\n`!kick @membre [raison]` — Expulse\n"
                    "`!mute @membre [raison]` — Mute\n`!unmute @membre` — Unmute\n"
-                   "`!effacer <n>` — Supprime n messages"), inline=False)
+                   "`!effacer <n>` — Supprime n messages\n"
+                   "`!say #salon message` — Fait parler le bot dans un salon"), inline=False)
     embed.add_field(name="━━━━━━━━━━━━━━━━━━\n📢 Publicité",
         value="`!pub` — Envoie la pub de recrutement La Mystic (accessible à tous)", inline=False)
     embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🎯 Mini-jeux",
