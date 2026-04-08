@@ -61,8 +61,8 @@ SPAM_WINDOW = 6.0
 spam_tracker: dict[int, list[float]] = defaultdict(list)
 spam_warned:  set[int] = set()
 
-DATA_FILE  = "user_data.json"
-GAMES_FILE = "games_data.json"
+DATA_FILE  = "/app/data/user_data.json"
+GAMES_FILE = "/app/data/games_data.json"
 
 xp_cooldowns: dict[int, float] = {}
 
@@ -1913,7 +1913,7 @@ ACHETEUR_ROLE_ID_NOTIF = 1491142208471044200  # rôle mentionné dans notifs + t
 VENDU_ROLE_ID         = 1491142348573380679   # rôle donné après vente
 ROLE_CHANNEL_ID       = 1491144873632469154   # salon pour embed toggle rôle
 
-CATALOGUE_FILE        = "catalogue_data.json"
+CATALOGUE_FILE        = "/app/data/catalogue_data.json"
 COMMANDE_CATEGORY_ID  = 1491137188333883586  # catégorie tickets commandes
 
 # ID du message catalogue (persisté entre les restarts)
