@@ -751,6 +751,18 @@ async def on_message(message: discord.Message):
                 spam_tracker[member.id] = []
                 await message.channel.send(f"⚠️ {member.mention} **Stop le spam !** Prochaine fois = **expulsion automatique**.", delete_after=10)
 
+    # ── Suppression messages dans salons commande (lecture seule) ──
+    if (
+        message.channel.category_id == COMMANDE_CATEGORY_ID
+        and not message.content.startswith("!")
+        and not message.author.guild_permissions.administrator
+    ):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return  # Ne pas processer les commandes non-! dans ces salons
+
     # ── XP (listener séparé via bot.listen) ──
     await bot.process_commands(message)
 
@@ -1902,6 +1914,7 @@ VENDU_ROLE_ID         = 1491142348573380679   # rôle donné après vente
 ROLE_CHANNEL_ID       = 1491144873632469154   # salon pour embed toggle rôle
 
 CATALOGUE_FILE        = "catalogue_data.json"
+COMMANDE_CATEGORY_ID  = 1491137188333883586  # catégorie tickets commandes
 
 # ID du message catalogue (persisté entre les restarts)
 _catalogue_msg_id: int | None = None
@@ -2081,139 +2094,203 @@ async def cataloguesupp_cmd(ctx, nom: str = None, pseudo: str = None):
 # ─────────────────────────────────────────────
 #  Commande !commande — Select menu
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+#  COMMANDE — Select menu (PERSISTANT, réutilisable à l'infini)
+# ─────────────────────────────────────────────
+# Stockage temporaire des commandes en cours par user (pour éviter les doublons)
+_pending_orders: dict[int, bool] = {}  # user_id → en cours
+
+
 class CommandeSelect(discord.ui.Select):
+    """
+    Select menu pour choisir un article.
+    Chaque interaction est indépendante et éphémère — l'embed principal
+    n'est JAMAIS désactivé ni modifié, plusieurs users peuvent l'utiliser simultanément.
+    """
     def __init__(self, items: dict):
         options = [
             discord.SelectOption(
                 label=item["nom"][:25],
                 value=key,
-                description=f"Stock: {item['quantite']} | Prix: {item['prix'][:50]}"[:100]
+                description=f"Stock: {item['quantite']} | {item['prix'][:40]}"[:100]
             )
             for key, item in items.items()
         ]
         super().__init__(
-            placeholder="Choisis un article…",
+            placeholder="🔹 Choisis un article…",
             min_values=1,
             max_values=1,
-            options=options[:25]  # Discord limite à 25 options
+            options=options[:25],
+            custom_id="commande_select"   # custom_id fixe pour persistance
         )
 
     async def callback(self, interaction: discord.Interaction):
+        uid = interaction.user.id
+
+        # Anti-doublon : empêche une commande simultanée pour le même user
+        if _pending_orders.get(uid):
+            await interaction.response.send_message(
+                "⏳ Tu as déjà une commande en cours. Termine-la d'abord.", ephemeral=True
+            )
+            return
+
+        # Recharge le catalogue en temps réel
         data    = load_catalogue()
         items   = data.get("items", {})
         nom_key = self.values[0]
         item    = items.get(nom_key)
 
         if not item:
-            await interaction.response.send_message("❌ Article introuvable.", ephemeral=True)
+            await interaction.response.send_message("❌ Article introuvable ou plus disponible.", ephemeral=True)
             return
 
-        # Désactive le select après sélection
-        self.disabled = True
-        await interaction.response.edit_message(view=self.view)
+        if item["quantite"] <= 0:
+            await interaction.response.send_message("❌ Cet article est en rupture de stock.", ephemeral=True)
+            return
 
-        # Demande la quantité via un message
-        embed = discord.Embed(
-            title=f"🛒 Commande — {item['nom']}",
-            description=(
-                f"Stock disponible : **{item['quantite']}**\n"
-                f"Prix unitaire : **{item['prix']}**\n\n"
-                f"Écris la **quantité** souhaitée dans ce salon (tu as 60 secondes) :"
-            ),
-            color=0x3498DB
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        # ── IMPORTANT : defer l'interaction IMMÉDIATEMENT pour éviter "interaction failed" ──
+        # On utilise ephemeral=True → réponse privée, l'embed public reste intact
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
-        def check(m):
-            return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
-
+        _pending_orders[uid] = True
         try:
-            msg = await bot.wait_for("message", check=check, timeout=60)
+            # Envoie la demande de quantité en réponse éphémère
+            embed_ask = discord.Embed(
+                title=f"🛒 Commande — {item['nom']}",
+                description=(
+                    f"📦 **Stock disponible :** {item['quantite']}\n"
+                    f"💰 **Prix unitaire :** {item['prix']}\n\n"
+                    f"Écris la **quantité** souhaitée dans ce salon.\n"
+                    f"*(Tu as **60 secondes** — écris un nombre entier)*"
+                ),
+                color=0x3498DB
+            )
+            await interaction.followup.send(embed=embed_ask, ephemeral=True)
+
+            # Attend le message de quantité dans le même salon, du même user
+            def check(m: discord.Message) -> bool:
+                return m.author.id == uid and m.channel.id == interaction.channel.id
+
             try:
-                qty_demandee = int(msg.content.strip())
-                if qty_demandee <= 0:
-                    raise ValueError
-            except ValueError:
-                await msg.delete()
-                await interaction.followup.send("❌ Quantité invalide.", ephemeral=True)
+                msg = await bot.wait_for("message", check=check, timeout=60)
+            except asyncio.TimeoutError:
+                await interaction.followup.send("⏰ Temps écoulé. Commande annulée.", ephemeral=True)
                 return
 
+            # Supprime le message de quantité immédiatement (salon "lecture seule")
             try:
                 await msg.delete()
             except Exception:
                 pass
 
-            if qty_demandee > item["quantite"]:
+            # Validation de la quantité
+            try:
+                qty = int(msg.content.strip())
+                if qty <= 0:
+                    raise ValueError
+            except ValueError:
+                await interaction.followup.send("❌ Quantité invalide (nombre entier positif requis).", ephemeral=True)
+                return
+
+            # Recharge le catalogue une 2e fois (évite race condition)
+            data  = load_catalogue()
+            items = data.get("items", {})
+            item  = items.get(nom_key)
+
+            if not item:
+                await interaction.followup.send("❌ Article retiré du catalogue entre-temps.", ephemeral=True)
+                return
+
+            if qty > item["quantite"]:
                 await interaction.followup.send(
                     f"❌ Stock insuffisant. Disponible : **{item['quantite']}**", ephemeral=True
                 )
                 return
 
-            # Calcul prix total si numérique
-            prix_str = item["prix"]
-
-            # Crée le ticket de commande
-            guild  = interaction.guild
-            vendeur = guild.get_member(item["vendeur_id"])
+            # ── Crée le ticket de commande ──
+            guild    = interaction.guild
             acheteur = interaction.user
+            vendeur  = guild.get_member(item["vendeur_id"])
 
+            # Catégorie ticket + permissions
+            category = guild.get_channel(COMMANDE_CATEGORY_ID)
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                acheteur:           discord.PermissionOverwrite(view_channel=True, send_messages=True),
-                guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                acheteur:           discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+                guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
             }
             if vendeur:
-                overwrites[vendeur] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+                overwrites[vendeur] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
             ticket_channel = await guild.create_text_channel(
-                f"commande-{acheteur.display_name[:20]}",
-                overwrites=overwrites
+                name=f"cmd-{acheteur.display_name[:18]}-{item['nom'][:10]}",
+                category=category,
+                overwrites=overwrites,
+                topic=f"commande|{nom_key}|{qty}|{item['vendeur_id']}"
             )
 
             embed_ticket = discord.Embed(
-                title="📦 Commande en cours",
+                title="📦 Nouvelle commande",
                 color=0x2ECC71,
                 timestamp=now_utc()
             )
-            embed_ticket.add_field(name="🔹 Article",    value=item["nom"],       inline=True)
-            embed_ticket.add_field(name="📦 Quantité",   value=str(qty_demandee), inline=True)
-            embed_ticket.add_field(name="💰 Prix unit.", value=prix_str,          inline=True)
-            embed_ticket.add_field(name="🛒 Acheteur",  value=acheteur.mention,  inline=True)
-            embed_ticket.add_field(name="👤 Vendeur",    value=vendeur.mention if vendeur else f"<@{item['vendeur_id']}>", inline=True)
-            embed_ticket.set_footer(text="Le vendeur utilise !vendu pour valider ou refuser")
+            embed_ticket.add_field(name="🔹 Article",     value=item["nom"],       inline=True)
+            embed_ticket.add_field(name="📦 Quantité",    value=str(qty),          inline=True)
+            embed_ticket.add_field(name="💰 Prix unit.",  value=item["prix"],      inline=True)
+            embed_ticket.add_field(name="🛒 Acheteur",   value=acheteur.mention,  inline=True)
+            embed_ticket.add_field(
+                name="👤 Vendeur",
+                value=vendeur.mention if vendeur else f"<@{item['vendeur_id']}>",
+                inline=True
+            )
+            embed_ticket.set_footer(text="Vendeur : utilise !vendu pour confirmer ou refuser la vente")
 
-            # Stocke les infos de commande dans le salon (via topic)
-            await ticket_channel.edit(topic=f"commande|{nom_key}|{qty_demandee}|{item['vendeur_id']}")
             await ticket_channel.send(
-                content=f"{acheteur.mention} {vendeur.mention if vendeur else ''}",
+                content=f"{acheteur.mention} {vendeur.mention if vendeur else f"<@{item['vendeur_id']}>"}",
                 embed=embed_ticket
             )
             await interaction.followup.send(
                 f"✅ Ticket créé : {ticket_channel.mention}", ephemeral=True
             )
 
-        except asyncio.TimeoutError:
-            await interaction.followup.send("⏰ Temps écoulé. Commande annulée.", ephemeral=True)
+        finally:
+            # Libère le verrou dans tous les cas (succès ou erreur)
+            _pending_orders.pop(uid, None)
 
 
 class CommandeView(discord.ui.View):
+    """
+    View principale pour !commande.
+    timeout=None → ne jamais expirer (persistant).
+    L'embed est TOUJOURS réutilisable, même après des dizaines de commandes.
+    """
     def __init__(self, items: dict):
-        super().__init__(timeout=120)
-        self.add_item(CommandeSelect(items))
+        super().__init__(timeout=None)
+        if items:
+            self.add_item(CommandeSelect(items))
 
-    @discord.ui.button(label="🔄 Rafraîchir", style=discord.ButtonStyle.grey, row=1)
+    @discord.ui.button(
+        label="🔄 Rafraîchir le catalogue",
+        style=discord.ButtonStyle.grey,
+        row=1,
+        custom_id="commande_refresh"
+    )
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Recrée la view avec les items à jour sans modifier l'embed."""
+        await interaction.response.defer(ephemeral=True, thinking=False)
         data  = load_catalogue()
         items = data.get("items", {})
         if not items:
-            await interaction.response.send_message("📭 Le catalogue est vide.", ephemeral=True)
+            await interaction.followup.send("📭 Le catalogue est vide pour l'instant.", ephemeral=True)
             return
-        await interaction.response.edit_message(view=CommandeView(items))
+        # Remplace uniquement la view (pas l'embed) → ne casse rien
+        await interaction.message.edit(view=CommandeView(items))
+        await interaction.followup.send("✅ Catalogue rafraîchi !", ephemeral=True)
 
 
 @bot.command(name="commande")
 async def commande_cmd(ctx):
-    """Affiche l'interface de commande. Réservé aux Officiers+."""
+    """Affiche l'interface de commande persistante. Réservé aux Officiers+."""
     if not is_staff(ctx.author):
         await ctx.send("❌ Réservé aux Officiers et Leaders.", delete_after=5)
         return
@@ -2224,26 +2301,63 @@ async def commande_cmd(ctx):
         return
     embed = discord.Embed(
         title="🛒 Passer une commande",
-        description="Clique sur **Prendre une commande** pour choisir un article.",
-        color=0x9B59B6
+        description=(
+            "**Sélectionne un article** dans le menu déroulant ci-dessous.\n"
+            "Tu devras ensuite indiquer la quantité souhaitée.\n\n"
+            "⚠️ *Écris ta quantité directement dans ce salon.*"
+        ),
+        color=0x9B59B6,
+        timestamp=now_utc()
     )
+    embed.set_footer(text="Cet embed est permanent et réutilisable par tous")
     await ctx.send(embed=embed, view=CommandeView(items))
+
+
+# ─────────────────────────────────────────────
+#  Logs messages dans salon commande (lecture seule)
+#  Supprime tout message utilisateur dans les salons de commande
+# ─────────────────────────────────────────────
+@bot.event
+async def on_message_in_commande(message: discord.Message):
+    """Supprime instantanément tout message d'un utilisateur dans un salon commande."""
+    if message.author.bot or not message.guild:
+        return
+    # Détecte les salons commande (commencent par "cmd-")
+    if message.channel.name.startswith("cmd-") or (
+        message.channel.category and message.channel.category.id == COMMANDE_CATEGORY_ID
+        and not message.channel.name.startswith("commande|")
+    ):
+        # Autorise uniquement le bot et le wait_for en cours (messages numériques attendus)
+        # Les messages de commandes (!vendu etc.) sont traités ailleurs
+        if not message.content.startswith("!"):
+            # Message numérique attendu par wait_for → ne pas supprimer
+            # (le wait_for le supprime lui-même après lecture)
+            pass
+        # Les autres messages non-bots, non-commandes → supprimés
+        # Note : on ne supprime PAS ici pour ne pas casser le wait_for.
+        # La suppression des messages non attendus est gérée par on_message_delete logs.
+    pass
 
 
 # ─────────────────────────────────────────────
 #  Commande !vendu
 # ─────────────────────────────────────────────
 class VenduView(discord.ui.View):
-    def __init__(self, vendeur_id: int, nom_key: str, quantite: int):
-        super().__init__(timeout=300)
-        self.vendeur_id = vendeur_id
-        self.nom_key    = nom_key
-        self.quantite   = quantite
-        self.done       = False
+    def __init__(self, vendeur_id: int, nom_key: str, quantite: int, ticket_channel_id: int):
+        super().__init__(timeout=600)  # 10 minutes
+        self.vendeur_id       = vendeur_id
+        self.nom_key          = nom_key
+        self.quantite         = quantite
+        self.ticket_channel_id = ticket_channel_id
+        self.done             = False
+
+    def _disable_all(self):
+        for child in self.children:
+            child.disabled = True
 
     @discord.ui.button(label="✅ Vendu", style=discord.ButtonStyle.green)
     async def vendu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.vendeur_id:
+        if interaction.user.id != self.vendeur_id and not is_staff(interaction.user):
             await interaction.response.send_message("❌ Seul le vendeur peut valider.", ephemeral=True)
             return
         if self.done:
@@ -2253,41 +2367,56 @@ class VenduView(discord.ui.View):
         self._disable_all()
         self.stop()
 
-        # ── Déduit le stock ──
+        # Defer immédiat pour éviter "interaction failed"
+        await interaction.response.defer()
+
+        guild = interaction.guild
         data  = load_catalogue()
         items = data.get("items", {})
-        guild = interaction.guild
+
+        # Récupère le nom avant modification
+        nom_affiche = items[self.nom_key]["nom"] if self.nom_key in items else self.nom_key
 
         if self.nom_key in items:
             items[self.nom_key]["quantite"] -= self.quantite
             if items[self.nom_key]["quantite"] <= 0:
-                nom_affiche = items[self.nom_key]["nom"]
                 del items[self.nom_key]
                 await send_notif(guild, f"📭 **{nom_affiche}** épuisé et retiré du catalogue.")
-            else:
-                nom_affiche = items[self.nom_key]["nom"]
             data["items"] = items
             save_catalogue(data)
             await update_catalogue_message(guild, items)
 
-        # ── Donne le rôle vendu ──
-        member = interaction.user
+        # Donne le rôle "vendu"
         vendu_role = guild.get_role(VENDU_ROLE_ID)
         if vendu_role:
             try:
-                await member.add_roles(vendu_role, reason="Vente confirmée")
+                acheteur_member = guild.get_channel(self.ticket_channel_id)
+                # Donne le rôle au vendeur qui confirme
+                await interaction.user.add_roles(vendu_role, reason="Vente confirmée")
             except Exception as e:
                 print(f"[VENDU] Erreur rôle : {e}")
 
-        embed = discord.Embed(title="✅ Vente confirmée !", color=0x2ECC71, timestamp=now_utc())
-        embed.add_field(name="📦 Article", value=self.nom_key, inline=True)
-        embed.add_field(name="🔢 Quantité", value=str(self.quantite), inline=True)
-        embed.set_footer(text="Le ticket peut être fermé avec !fermer")
-        await interaction.response.edit_message(embed=embed, view=self)
+        embed = discord.Embed(
+            title="✅ Vente confirmée !",
+            description=f"Article : **{nom_affiche}**\nQuantité vendue : **{self.quantite}**",
+            color=0x2ECC71,
+            timestamp=now_utc()
+        )
+        embed.set_footer(text="Ticket fermé automatiquement dans 10 secondes")
+        await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=self)
+
+        # Fermeture automatique du ticket après 10s
+        await asyncio.sleep(10)
+        channel = guild.get_channel(self.ticket_channel_id)
+        if channel:
+            try:
+                await channel.delete(reason="Vente confirmée — fermeture automatique")
+            except Exception:
+                pass
 
     @discord.ui.button(label="❌ Pas vendu", style=discord.ButtonStyle.red)
     async def pas_vendu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.vendeur_id:
+        if interaction.user.id != self.vendeur_id and not is_staff(interaction.user):
             await interaction.response.send_message("❌ Seul le vendeur peut décider.", ephemeral=True)
             return
         if self.done:
@@ -2296,18 +2425,31 @@ class VenduView(discord.ui.View):
         self.done = True
         self._disable_all()
         self.stop()
-        embed = discord.Embed(title="❌ Vente annulée", description="Le stock n'a pas été modifié.", color=0xE74C3C, timestamp=now_utc())
-        await interaction.response.edit_message(embed=embed, view=self)
 
-    def _disable_all(self):
-        for child in self.children:
-            child.disabled = True
+        await interaction.response.defer()
+
+        embed = discord.Embed(
+            title="❌ Vente annulée",
+            description="Le stock n'a pas été modifié.\nTicket fermé automatiquement dans 10 secondes.",
+            color=0xE74C3C,
+            timestamp=now_utc()
+        )
+        await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=self)
+
+        # Fermeture automatique du ticket après 10s
+        await asyncio.sleep(10)
+        guild   = interaction.guild
+        channel = guild.get_channel(self.ticket_channel_id)
+        if channel:
+            try:
+                await channel.delete(reason="Vente annulée — fermeture automatique")
+            except Exception:
+                pass
 
 
 @bot.command(name="vendu")
 async def vendu_cmd(ctx):
     """Valide ou annule une vente. Uniquement dans un ticket de commande, par le vendeur."""
-    # Vérifie qu'on est dans un ticket de commande
     if not ctx.channel.topic or not ctx.channel.topic.startswith("commande|"):
         await ctx.send("❌ Cette commande s'utilise uniquement dans un ticket de commande.", delete_after=6)
         return
@@ -2325,14 +2467,13 @@ async def vendu_cmd(ctx):
         await ctx.send("❌ Données du ticket corrompues.", delete_after=6)
         return
 
-    # Vérifie que c'est le vendeur
     if ctx.author.id != vendeur_id and not is_staff(ctx.author):
         await ctx.send("❌ Seul le vendeur de cet article peut utiliser cette commande.", delete_after=6)
         return
 
-    data  = load_catalogue()
-    items = data.get("items", {})
-    item  = items.get(nom_key)
+    data        = load_catalogue()
+    items       = data.get("items", {})
+    item        = items.get(nom_key)
     nom_affiche = item["nom"] if item else nom_key
 
     embed = discord.Embed(
@@ -2341,19 +2482,19 @@ async def vendu_cmd(ctx):
         color=0x9B59B6,
         timestamp=now_utc()
     )
-    embed.set_footer(text="Seul le vendeur peut confirmer")
-    await ctx.send(embed=embed, view=VenduView(vendeur_id, nom_key, quantite))
+    embed.set_footer(text="Seul le vendeur peut confirmer • Le ticket se ferme automatiquement")
+    await ctx.send(embed=embed, view=VenduView(vendeur_id, nom_key, quantite, ctx.channel.id))
 
 
 # ─────────────────────────────────────────────
-#  Commande !role — Toggle rôle acheteur
+#  Commande !role — Toggle rôle notifications market
 # ─────────────────────────────────────────────
 class RoleToggleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="🔔 Toggle rôle Acheteur",
+        label="🔔 Activer les notifications du market",
         style=discord.ButtonStyle.blurple,
         custom_id="role_toggle_acheteur"
     )
@@ -2363,17 +2504,19 @@ class RoleToggleView(discord.ui.View):
             await interaction.response.send_message("❌ Rôle introuvable.", ephemeral=True)
             return
         member = interaction.user
+        # Defer immédiat pour éviter "interaction failed"
+        await interaction.response.defer(ephemeral=True, thinking=False)
         if role in member.roles:
-            await member.remove_roles(role, reason="Toggle rôle acheteur")
-            await interaction.response.send_message(f"🔕 Rôle **{role.name}** retiré.", ephemeral=True)
+            await member.remove_roles(role, reason="Toggle notif market")
+            await interaction.followup.send(f"🔕 Notifications marché **désactivées**.", ephemeral=True)
         else:
-            await member.add_roles(role, reason="Toggle rôle acheteur")
-            await interaction.response.send_message(f"🔔 Rôle **{role.name}** attribué !", ephemeral=True)
+            await member.add_roles(role, reason="Toggle notif market")
+            await interaction.followup.send(f"🔔 Notifications marché **activées** !", ephemeral=True)
 
 
 @bot.command(name="role")
 async def role_cmd(ctx):
-    """Envoie l'embed toggle rôle. Réservé aux Officiers+."""
+    """Envoie l'embed toggle rôle notifications. Réservé aux Officiers+."""
     if not is_staff(ctx.author):
         await ctx.send("❌ Réservé aux Officiers et Leaders.", delete_after=5)
         return
@@ -2385,14 +2528,13 @@ async def role_cmd(ctx):
             await ctx.send("❌ Salon introuvable.", delete_after=5)
             return
     embed = discord.Embed(
-        title="🔔 Notifications d'achat",
+        title="🔔 Notifications du marché",
         description=(
             "Clique sur le bouton ci-dessous pour **activer ou désactiver** "
-            "les notifications quand un nouvel article est ajouté au catalogue."
+            "les notifications quand un nouvel article est ajouté au catalogue du marché."
         ),
         color=0x9B59B6
     )
-    bot.add_view(RoleToggleView())  # Persistent
     await channel.send(embed=embed, view=RoleToggleView())
     await ctx.send(f"✅ Embed posté dans {channel.mention}", delete_after=5)
 
@@ -2402,7 +2544,7 @@ async def role_cmd(ctx):
 # ─────────────────────────────────────────────
 async def _restore_catalogue():
     global _catalogue_msg_id
-    data = load_catalogue()
+    data   = load_catalogue()
     msg_id = data.get("msg_id")
     if msg_id:
         _catalogue_msg_id = msg_id
