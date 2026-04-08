@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 import asyncio
-import io 
+import io
 import os
 import re
 import time
@@ -73,7 +73,7 @@ EXEMPT_COMMANDS = {
     "classement", "top", "leaderboard",
     "giveaway", "gw",
     "pub",
-    "say", "dit", "fermer",
+    "say", "dit", "fermer", "stock", "recherche",
     "help", "aide", "commandes",
     "info",
 }
@@ -1812,77 +1812,87 @@ bot.remove_command("help")
 @bot.command(name="help", aliases=["aide", "commandes"])
 async def help_cmd(ctx):
     staff = is_staff(ctx.author)
-    embed = discord.Embed(title="📖 Aide — Commandes du bot",
-        description="Voici toutes les commandes disponibles.\n*(🔒 = réservé au staff)*", color=0x9B59B6)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n👤 Commandes générales",
-        value="`!info @membre` — Infos d'un membre\n`!level` — Ton niveau XP\n`!classement` — Top 10\n`!help` — Ce message", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🎫 Tickets",
-        value="`!ticket` 🔒 — Panneau tickets\n`!fermer` — Ferme le ticket (accessible à tous dans un ticket)", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n📋 Roster",
-        value="`!roster` 🔒 — Met à jour le roster", inline=False)
-    if staff:
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🔨 Modération 🔒",
-            value=("`!ban @membre [raison]` — Bannit\n`!kick @membre [raison]` — Expulse\n"
-                   "`!mute @membre [raison]` — Mute\n`!unmute @membre` — Unmute\n"
-                   "`!effacer <n>` — Supprime n messages\n"
-                   "`!say #salon message` — Fait parler le bot dans un salon"), inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n📢 Publicité",
-        value="`!pub` — Envoie la pub de recrutement La Mystic (accessible à tous)", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🏪 Catalogue & Boutique",
+    embed = discord.Embed(
+        title="📖 Aide — Mystic Bot",
+        description="Toutes les commandes disponibles.\n*(🔒 = Officier+ | 🏷️ = Vendeur certifié)*",
+        color=0x9B59B6
+    )
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━\n👤 Général",
         value=(
-            "`!catalogue [nom] [qté] [prix]` 🔒 — Ajoute/met à jour un article (vendeur certifié)\n"
-            "`!cataloguesupp [nom]` 🔒 — Supprime un article du catalogue\n"
-            "`!commande` 🔒 — Ouvre le menu de commande (Officier+)\n"
-            "`!vendu` 🔒 — Valide/annule une vente (vendeur, dans le ticket)\n"
-            "`!role` 🔒 — Poste le bouton toggle rôle notifications (Officier+)\n"
-            "`!say / !dit #salon message` 🔒 — Fait parler le bot"
-        ), inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🎯 Mini-jeux",
-        value=("**Pendu**\n`!pendu` — Lance une partie\n`!devine [lettre]` — Deviner une lettre\n"
-               "`!mot [mot]` — Deviner le mot\n`!pendustop` 🔒 — Arrête la partie\n\n"
-               "**Morpion**\n`!morpion @joueur` — Lancer un 1v1\n`!morpionstop` 🔒 — Arrête la partie\n\n"
-               "**Autres**\n`!pileouface` — Pile ou face\n`!giveaway [durée] [récompense]` 🔒 — Giveaway"), inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🛡️ Protections automatiques",
-        value=("🔗 **Anti-liens** — Liens supprimés automatiquement\n"
-               "⚡ **Anti-spam** — +4 msgs en 6s = avertissement puis expulsion"), inline=False)
-    embed.set_footer(text="🔒 = réservé aux Officiers et grades supérieurs")
+            "`!info [@membre]` — Infos d'un membre\n"
+            "`!level [@membre]` — Niveau XP et stats\n"
+            "`!classement` — Top 10 serveur\n"
+            "`!pub` — Pub de recrutement\n"
+            "`!help` — Ce message"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━\n🎫 Tickets",
+        value=(
+            "`!ticket` 🔒 — Panneau tickets\n"
+            "`!fermer` — Ferme le ticket (accessible à tous dans un ticket)"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━\n🏪 Marché — Catalogue",
+        value=(
+            f"`!recherche [item]` — Recherche un article (dans <#{RECHERCHE_SALON_ID}> pour les membres)\n"
+            "`!catalogue [nom] [qté] [prix]` 🏷️ — Ajoute/met à jour un article\n"
+            "`!cataloguesupp [nom]` 🏷️ — Supprime un article\n"
+            "`!stock` 🏷️ — Ton stock personnel"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━\n🛒 Marché — Commandes",
+        value=(
+            "`!commande` 🔒 — Menu de commande interactif\n"
+            "`!vendu` 🏷️ — Confirme/annule une vente (dans le ticket)"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━\n🔔 Rôles",
+        value="`!role` 🔒 — Bouton notifications marché",
+        inline=False
+    )
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━\n🎯 Mini-jeux",
+        value=(
+            "**Pendu** : `!pendu` · `!devine [lettre]` · `!mot [mot]` · `!pendustop` 🔒\n"
+            "**Morpion** : `!morpion @joueur` · `!morpionstop` 🔒\n"
+            "**Autres** : `!pileouface` · `!giveaway [durée] [récompense]` 🔒"
+        ),
+        inline=False
+    )
+    if staff:
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━\n🔨 Modération 🔒",
+            value=(
+                "`!ban @membre [raison]` — Bannit\n"
+                "`!kick @membre [raison]` — Expulse\n"
+                "`!mute @membre [raison]` — Mute\n"
+                "`!unmute @membre` — Unmute\n"
+                "`!effacer <n>` — Supprime n messages\n"
+                "`!roster` — Met à jour le roster\n"
+                "`!say / !dit #salon message` — Fait parler le bot"
+            ),
+            inline=False
+        )
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━\n🛡️ Protections auto",
+        value=(
+            "🔗 Anti-liens — Liens supprimés automatiquement\n"
+            "⚡ Anti-spam — +4 msgs en 6s = avertissement puis expulsion\n"
+            "🛡️ Anti-alt — Détection comptes suspects"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="🔒 = Officier+ | 🏷️ = Vendeur certifié ou Officier+")
     await ctx.send(embed=embed)
-
-
-# ═══════════════════════════════════════════════════════════════
-#  DÉMARRAGE
-# ═══════════════════════════════════════════════════════════════
-async def _auto_save_loop():
-    """Sauvegarde automatique toutes les 5 minutes en arrière-plan."""
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        await asyncio.sleep(300)  # 5 minutes
-        try:
-            data = load_user_data()
-            save_user_data(data)
-            print(f"[DATA] Auto-save : {len(data)} utilisateurs sauvegardés")
-        except Exception as e:
-            print(f"[DATA] Erreur auto-save : {e}")
-
-
-@bot.event
-async def on_ready():
-    print(f"✅ Mystic Bot connecté : {bot.user}")
-    print(f"   LOG_CHANNEL_ID    = {LOG_CHANNEL_ID}")
-    print(f"   ROSTER_CHANNEL_ID = {ROSTER_CHANNEL_ID}")
-    print(f"   WELCOME_CHANNEL_ID = {WELCOME_CHANNEL_ID}")
-    print(f"   Anti-spam         : {SPAM_LIMIT} msgs / {SPAM_WINDOW}s")
-    # Réenregistre les vues persistantes pour les tickets
-    bot.add_view(TicketView())
-    bot.add_view(RoleToggleView())
-    await _restore_games()
-    await _restore_catalogue()
-    # Lance la sauvegarde automatique périodique (toutes les 5 min)
-    asyncio.create_task(_auto_save_loop())
-    # Vérifie que les données sont bien chargées
-    data = load_user_data()
-    print(f"[DATA] Auto-save activé (toutes les 5 min)")
-    print(f"[READY] Données utilisateurs : {len(data)} entrée(s) chargée(s)")
 
 
 @bot.event
@@ -1914,7 +1924,8 @@ VENDU_ROLE_ID         = 1491142348573380679   # rôle donné après vente
 ROLE_CHANNEL_ID       = 1491144873632469154   # salon pour embed toggle rôle
 
 CATALOGUE_FILE        = "/app/data/catalogue_data.json"
-COMMANDE_CATEGORY_ID  = 1491137188333883586  # catégorie tickets commandes
+COMMANDE_CATEGORY_ID  = 1491137188333883586
+VENTES_LOG_CHANNEL_ID = 1491139336199082175  # salon logs des ventes (même que catalogue ou à changer)  # catégorie tickets commandes
 
 # ID du message catalogue (persisté entre les restarts)
 _catalogue_msg_id: int | None = None
@@ -2229,24 +2240,45 @@ class CommandeSelect(discord.ui.Select):
                 topic=f"commande|{nom_key}|{qty}|{item['vendeur_id']}"
             )
 
+            # Calcul prix total si numérique possible
+            prix_raw = item["prix"]
+            prix_total_str = ""
+            try:
+                # Tente d'extraire un nombre du prix pour calculer le total
+                import re as _re2
+                nums = _re2.findall(r"[\d]+(?:[.,][\d]+)?", prix_raw)
+                if nums:
+                    unit_val = float(nums[0].replace(",", "."))
+                    total_val = unit_val * qty
+                    # Garde le format original (entier ou décimal)
+                    if total_val == int(total_val):
+                        prix_total_str = f"{qty} × {prix_raw} = **{int(total_val)}**"
+                    else:
+                        prix_total_str = f"{qty} × {prix_raw} = **{total_val:.2f}**"
+                else:
+                    prix_total_str = f"{qty} × {prix_raw}"
+            except Exception:
+                prix_total_str = f"{qty} × {prix_raw}"
+
             embed_ticket = discord.Embed(
                 title="📦 Nouvelle commande",
                 color=0x2ECC71,
                 timestamp=now_utc()
             )
-            embed_ticket.add_field(name="🔹 Article",     value=item["nom"],       inline=True)
-            embed_ticket.add_field(name="📦 Quantité",    value=str(qty),          inline=True)
-            embed_ticket.add_field(name="💰 Prix unit.",  value=item["prix"],      inline=True)
-            embed_ticket.add_field(name="🛒 Acheteur",   value=acheteur.mention,  inline=True)
+            embed_ticket.add_field(name="🔹 Article",      value=item["nom"],       inline=True)
+            embed_ticket.add_field(name="📦 Quantité",     value=str(qty),          inline=True)
+            embed_ticket.add_field(name="💰 Prix unit.",   value=prix_raw,          inline=True)
+            embed_ticket.add_field(name="🧾 Prix total",   value=prix_total_str,    inline=False)
+            embed_ticket.add_field(name="🛒 Acheteur",    value=acheteur.mention,  inline=True)
             embed_ticket.add_field(
                 name="👤 Vendeur",
-                value=vendeur.mention if vendeur else f"<@{item['vendeur_id']}>",
+                value=vendeur.mention if vendeur else "<@" + str(item["vendeur_id"]) + ">",
                 inline=True
             )
             embed_ticket.set_footer(text="Vendeur : utilise !vendu pour confirmer ou refuser la vente")
 
             await ticket_channel.send(
-                content=f"{acheteur.mention} {vendeur.mention if vendeur else f"<@{item['vendeur_id']}>"}",
+                content=f"{acheteur.mention} {vendeur.mention if vendeur else '<@' + str(item['vendeur_id']) + '>'}",
                 embed=embed_ticket
             )
             await interaction.followup.send(
@@ -2377,7 +2409,20 @@ class VenduView(discord.ui.View):
         # Récupère le nom avant modification
         nom_affiche = items[self.nom_key]["nom"] if self.nom_key in items else self.nom_key
 
+        # Récupère infos ticket pour le log
+        ticket_ch = guild.get_channel(self.ticket_channel_id)
+        ticket_topic = ticket_ch.topic if ticket_ch else ""
+        acheteur_id = None
+        prix_item = ""
+        if ticket_ch:
+            # Cherche l'acheteur dans les permissions du salon
+            for target, overwrite in ticket_ch.overwrites.items():
+                if isinstance(target, discord.Member) and target.id != interaction.user.id and not target.bot:
+                    acheteur_id = target.id
+                    break
+
         if self.nom_key in items:
+            prix_item = items[self.nom_key].get("prix", "?")
             items[self.nom_key]["quantite"] -= self.quantite
             if items[self.nom_key]["quantite"] <= 0:
                 del items[self.nom_key]
@@ -2385,6 +2430,16 @@ class VenduView(discord.ui.View):
             data["items"] = items
             save_catalogue(data)
             await update_catalogue_message(guild, items)
+
+        # ── Log de vente ──
+        await _log_vente(
+            guild=guild,
+            acheteur_id=acheteur_id,
+            vendeur=interaction.user,
+            nom=nom_affiche,
+            quantite=self.quantite,
+            prix_unitaire=prix_item
+        )
 
         # Donne le rôle "vendu"
         vendu_role = guild.get_role(VENDU_ROLE_ID)
@@ -2538,6 +2593,162 @@ async def role_cmd(ctx):
     await channel.send(embed=embed, view=RoleToggleView())
     await ctx.send(f"✅ Embed posté dans {channel.mention}", delete_after=5)
 
+
+
+# ─────────────────────────────────────────────
+#  Log des ventes
+# ─────────────────────────────────────────────
+async def _log_vente(guild: discord.Guild, acheteur_id, vendeur: discord.Member,
+                     nom: str, quantite: int, prix_unitaire: str):
+    """Envoie un log de vente dans le salon dédié."""
+    log_ch = guild.get_channel(VENTES_LOG_CHANNEL_ID)
+    if not log_ch:
+        try:
+            log_ch = await guild.fetch_channel(VENTES_LOG_CHANNEL_ID)
+        except Exception:
+            return
+
+    # Calcul prix total
+    prix_total_str = ""
+    try:
+        import re as _re3
+        nums = _re3.findall(r"[\d]+(?:[.,][\d]+)?", prix_unitaire)
+        if nums:
+            unit_val = float(nums[0].replace(",", "."))
+            total_val = unit_val * quantite
+            if total_val == int(total_val):
+                prix_total_str = f"{int(total_val)}"
+            else:
+                prix_total_str = f"{total_val:.2f}"
+        else:
+            prix_total_str = f"?"
+    except Exception:
+        prix_total_str = "?"
+
+    acheteur_mention = f"<@{acheteur_id}>" if acheteur_id else "Inconnu"
+
+    embed = discord.Embed(
+        title="💸 Vente confirmée",
+        color=0x2ECC71,
+        timestamp=now_utc()
+    )
+    embed.add_field(name="🔹 Article",     value=nom,                                inline=True)
+    embed.add_field(name="📦 Quantité",    value=str(quantite),                      inline=True)
+    embed.add_field(name="💰 Prix unit.",  value=prix_unitaire,                      inline=True)
+    embed.add_field(name="🧾 Prix total",  value=f"{quantite} × {prix_unitaire} = **{prix_total_str}**", inline=False)
+    embed.add_field(name="🛒 Acheteur",   value=acheteur_mention,                   inline=True)
+    embed.add_field(name="👤 Vendeur",    value=vendeur.mention,                    inline=True)
+    embed.add_field(name="🕐 Date",       value=now_str(),                           inline=False)
+    embed.set_footer(text="Historique des ventes — La Mystic Market")
+    await log_ch.send(embed=embed)
+
+
+# ─────────────────────────────────────────────
+#  Commande !stock
+# ─────────────────────────────────────────────
+@bot.command(name="stock")
+async def stock_cmd(ctx):
+    """Affiche les items du vendeur qui utilise la commande."""
+    if not is_vendeur(ctx.author):
+        await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5)
+        return
+
+    data  = load_catalogue()
+    items = data.get("items", {})
+
+    # Filtre uniquement les items du vendeur
+    mes_items = {k: v for k, v in items.items() if v.get("vendeur_id") == ctx.author.id}
+
+    embed = discord.Embed(
+        title=f"📦 Mon stock — {ctx.author.display_name}",
+        color=0x3498DB,
+        timestamp=now_utc()
+    )
+
+    if not mes_items:
+        embed.description = "Tu n'as aucun article dans le catalogue pour l'instant."
+        embed.add_field(
+            name="💡 Astuce",
+            value="Utilise `!catalogue [nom] [quantité] [prix]` pour ajouter un article.",
+            inline=False
+        )
+    else:
+        total_articles = len(mes_items)
+        total_unites   = sum(v["quantite"] for v in mes_items.values())
+        embed.description = f"**{total_articles}** article(s) en vente • **{total_unites}** unité(s) au total"
+        for key, item in mes_items.items():
+            embed.add_field(
+                name=f"🔹 {item['nom']}",
+                value=(
+                    f"📦 **Stock :** {item['quantite']}\n💰 **Prix :** {item['prix']}"
+                ),
+                inline=True
+            )
+
+    embed.set_footer(text="Utilisez !catalogue pour ajouter • !cataloguesupp pour retirer")
+    await ctx.send(embed=embed)
+
+
+# ─────────────────────────────────────────────
+#  Commande !recherche
+# ─────────────────────────────────────────────
+RECHERCHE_SALON_ID = 1491139336199082175  # salon autorisé pour les non-staff
+
+@bot.command(name="recherche")
+async def recherche_cmd(ctx, *, terme: str = None):
+    """Recherche un article dans le catalogue."""
+    if terme is None:
+        await ctx.send("❌ Utilisation : `!recherche [nom_item]`", delete_after=6)
+        return
+
+    # Restriction salon pour les non-staff
+    if not is_staff(ctx.author) and ctx.channel.id != RECHERCHE_SALON_ID:
+        await ctx.send(
+            f"❌ Tu peux utiliser `!recherche` uniquement dans <#{RECHERCHE_SALON_ID}>.",
+            delete_after=8
+        )
+        return
+
+    data  = load_catalogue()
+    items = data.get("items", {})
+    terme_lower = terme.lower().strip()
+
+    # Recherche par correspondance partielle
+    resultats = {
+        k: v for k, v in items.items()
+        if terme_lower in k.lower() or terme_lower in v["nom"].lower()
+    }
+
+    embed = discord.Embed(
+        title=f"🔍 Recherche : « {terme} »",
+        color=0x9B59B6,
+        timestamp=now_utc()
+    )
+
+    if not resultats:
+        embed.description = f"❌ Aucun article trouvé pour **{terme}**."
+        embed.add_field(
+            name="💡 Conseil",
+            value="Essaie un terme plus court ou vérifie l'orthographe.",
+            inline=False
+        )
+    else:
+        embed.description = f"**{len(resultats)}** résultat(s) trouvé(s) :"
+        for key, item in resultats.items():
+            vendeur_m = ctx.guild.get_member(item["vendeur_id"])
+            vendeur_str = vendeur_m.display_name if vendeur_m else f"<@{item['vendeur_id']}>"
+            embed.add_field(
+                name=f"🔹 {item['nom']}",
+                value=(
+                    f"📦 **Stock :** {item['quantite']}\n"
+                    f"💰 **Prix :** {item['prix']}\n"
+                    f"👤 **Vendeur :** {vendeur_str}"
+                ),
+                inline=True
+            )
+
+    embed.set_footer(text="Utilisez !commande pour passer une commande")
+    await ctx.send(embed=embed)
 
 # ─────────────────────────────────────────────
 #  Chargement msg_id catalogue au démarrage
