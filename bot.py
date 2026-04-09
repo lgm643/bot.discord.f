@@ -56,6 +56,12 @@ FACTION_ROLE_IDS  = {
 ALLOWED_DOMAINS      = {"tenor.com", "giphy.com"}
 ALLOWED_CMD_CHANNELS = {703342923634180137, 703349716183941162}
 
+# ── Salons marché ─────────────────────────────────────────────
+MARCHE_CATALOGUE_SALON_ID = 1491139336199082175  # salon catalogue (lecture seule / !stock éphémère)
+MARCHE_COMMANDES_SALON_ID = 1491140888645210142  # salon commandes (tout le monde peut parler)
+MARCHE_CMD_SALONS         = {703342923634180137, MARCHE_COMMANDES_SALON_ID}  # salons où vendeurs/staff-market peuvent utiliser !catalogue etc.
+STAFF_MARKET_ROLE_ID      = 1491142044561707159  # Staff Market (même ID que vendeur certifié)
+
 SPAM_LIMIT  = 4
 SPAM_WINDOW = 6.0
 spam_tracker: dict[int, list[float]] = defaultdict(list)
@@ -130,12 +136,37 @@ def fmt_voice(seconds: float) -> str:
 # ─────────────────────────────────────────────
 #  CHECK GLOBAL
 # ─────────────────────────────────────────────
+def is_staff_market(member: discord.Member) -> bool:
+    """Vérifie si le membre est Staff Market ou vendeur certifié."""
+    return any(r.id == STAFF_MARKET_ROLE_ID for r in member.roles) or is_staff(member)
+
+
 @bot.check
 async def check_command_channel(ctx: commands.Context) -> bool:
-    if ctx.command and ctx.command.name in EXEMPT_COMMANDS:
+    cmd = ctx.command.name if ctx.command else ""
+
+    # ── Commandes exemptées partout ──
+    if cmd in EXEMPT_COMMANDS:
         return True
+
+    # ── Staff passe toujours ──
     if is_staff(ctx.author):
         return True
+
+    # ── !stock, !catalogue, !cataloguesupp : salons marché uniquement pour vendeurs/staff-market ──
+    if cmd in {"catalogue", "cataloguesupp"}:
+        if not is_staff_market(ctx.author):
+            await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5)
+            return False
+        if ctx.channel.id not in MARCHE_CMD_SALONS:
+            await ctx.send(
+                f"❌ Utilise cette commande dans <#{list(MARCHE_CMD_SALONS)[0]}> ou <#{list(MARCHE_CMD_SALONS)[1]}>.",
+                delete_after=8
+            )
+            return False
+        return True
+
+    # ── Salons normaux ──
     if ctx.channel.id not in ALLOWED_CMD_CHANNELS:
         channels = " ou ".join(f"<#{cid}>" for cid in ALLOWED_CMD_CHANNELS)
         await ctx.send(
@@ -751,6 +782,24 @@ async def on_message(message: discord.Message):
                 spam_tracker[member.id] = []
                 await message.channel.send(f"⚠️ {member.mention} **Stop le spam !** Prochaine fois = **expulsion automatique**.", delete_after=10)
 
+    # ── Salon catalogue (lecture seule stricte) ──
+    # Seuls le bot et les officiers+ peuvent parler.
+    # Les messages utilisateurs sont supprimés SAUF s'ils sont attendus par un wait_for.
+    if message.channel.id == MARCHE_CATALOGUE_SALON_ID:
+        if not is_staff(member):
+            # Autorise les messages numériques attendus par wait_for (quantité commande)
+            # Ils seront supprimés par le code du wait_for lui-même
+            is_numeric_input = message.content.strip().lstrip("-").isdigit()
+            if not is_numeric_input and not message.content.startswith("!"):
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+                return
+        # Processer les commandes même dans ce salon
+        await bot.process_commands(message)
+        return
+
     # ── Suppression messages dans salons commande (lecture seule) ──
     if (
         message.channel.category_id == COMMANDE_CATEGORY_ID
@@ -761,7 +810,7 @@ async def on_message(message: discord.Message):
             await message.delete()
         except Exception:
             pass
-        return  # Ne pas processer les commandes non-! dans ces salons
+        return
 
     # ── XP (listener séparé via bot.listen) ──
     await bot.process_commands(message)
@@ -2647,46 +2696,87 @@ async def _log_vente(guild: discord.Guild, acheteur_id, vendeur: discord.Member,
 #  Commande !stock
 # ─────────────────────────────────────────────
 @bot.command(name="stock")
-async def stock_cmd(ctx):
-    """Affiche les items du vendeur qui utilise la commande."""
-    if not is_vendeur(ctx.author):
-        await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5)
-        return
+async def stock_cmd(ctx, cible: discord.Member = None):
+    """
+    Affiche le stock d'un vendeur.
+    - Dans le salon catalogue (1491139336199082175) : accessible à tous, réponse éphémère.
+      Syntaxe : !stock ou !stock @joueur
+    - Ailleurs : réservé aux vendeurs certifiés / staff-market, dans les salons marché.
+    """
+    in_catalogue_salon = (ctx.channel.id == MARCHE_CATALOGUE_SALON_ID)
+
+    # Vérifie les permissions selon le salon
+    if not in_catalogue_salon:
+        # Hors salon catalogue : réservé aux vendeurs/staff-market dans les bons salons
+        if not is_staff_market(ctx.author):
+            await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5)
+            return
+        if ctx.channel.id not in MARCHE_CMD_SALONS:
+            await ctx.send(
+                f"❌ Utilise `!stock` dans <#{list(MARCHE_CMD_SALONS)[0]}> ou <#{list(MARCHE_CMD_SALONS)[1]}>.",
+                delete_after=8
+            )
+            return
+
+    # Détermine le membre cible
+    if cible is not None:
+        # On veut voir le stock d'un autre joueur
+        target = cible
+    else:
+        target = ctx.author
 
     data  = load_catalogue()
     items = data.get("items", {})
 
-    # Filtre uniquement les items du vendeur
-    mes_items = {k: v for k, v in items.items() if v.get("vendeur_id") == ctx.author.id}
+    # Filtre les items du vendeur cible
+    ses_items = {k: v for k, v in items.items() if v.get("vendeur_id") == target.id}
 
-    embed = discord.Embed(
-        title=f"📦 Mon stock — {ctx.author.display_name}",
-        color=0x3498DB,
-        timestamp=now_utc()
-    )
-
-    if not mes_items:
-        embed.description = "Tu n'as aucun article dans le catalogue pour l'instant."
-        embed.add_field(
-            name="💡 Astuce",
-            value="Utilise `!catalogue [nom] [quantité] [prix]` pour ajouter un article.",
-            inline=False
-        )
+    if target.id == ctx.author.id:
+        title = f"📦 Mon stock — {target.display_name}"
+        footer = "Utilisez !catalogue pour ajouter • !cataloguesupp pour retirer"
     else:
-        total_articles = len(mes_items)
-        total_unites   = sum(v["quantite"] for v in mes_items.values())
-        embed.description = f"**{total_articles}** article(s) en vente • **{total_unites}** unité(s) au total"
-        for key, item in mes_items.items():
+        title = f"📦 Stock de {target.display_name}"
+        footer = "Consultez !catalogue pour voir le catalogue complet"
+
+    embed = discord.Embed(title=title, color=0x3498DB, timestamp=now_utc())
+
+    if not ses_items:
+        if target.id == ctx.author.id:
+            embed.description = "Tu n'as aucun article dans le catalogue pour l'instant."
+            embed.add_field(
+                name="💡 Astuce",
+                value="Utilise `!catalogue [nom] [quantité] [prix]` pour ajouter un article.",
+                inline=False
+            )
+        else:
+            embed.description = f"**{target.display_name}** n'a aucun article en vente."
+    else:
+        total_articles = len(ses_items)
+        total_unites   = sum(v["quantite"] for v in ses_items.values())
+        embed.description = f"**{total_articles}** article(s) • **{total_unites}** unité(s) au total"
+        for key, item in ses_items.items():
             embed.add_field(
                 name=f"🔹 {item['nom']}",
-                value=(
-                    f"📦 **Stock :** {item['quantite']}\n💰 **Prix :** {item['prix']}"
-                ),
+                value=f"📦 **Stock :** {item['quantite']}\n💰 **Prix :** {item['prix']}",
                 inline=True
             )
 
-    embed.set_footer(text="Utilisez !catalogue pour ajouter • !cataloguesupp pour retirer")
-    await ctx.send(embed=embed)
+    embed.set_footer(text=footer)
+
+    # Dans le salon catalogue : réponse éphémère (visible uniquement par l'auteur)
+    if in_catalogue_salon:
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        await ctx.author.send(embed=embed)
+        # Confirme à l'auteur que la réponse a été envoyée en DM
+        confirm = await ctx.send(
+            f"📩 {ctx.author.mention} Ta réponse a été envoyée en message privé.",
+            delete_after=6
+        )
+    else:
+        await ctx.send(embed=embed)
 
 
 # ─────────────────────────────────────────────
@@ -2748,7 +2838,17 @@ async def recherche_cmd(ctx, *, terme: str = None):
             )
 
     embed.set_footer(text="Utilisez !commande pour passer une commande")
-    await ctx.send(embed=embed)
+
+    # Dans le salon catalogue : supprime la commande et répond en DM
+    if ctx.channel.id == MARCHE_CATALOGUE_SALON_ID:
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        await ctx.author.send(embed=embed)
+        await ctx.send(f"📩 {ctx.author.mention} Résultat envoyé en message privé.", delete_after=6)
+    else:
+        await ctx.send(embed=embed)
 
 # ─────────────────────────────────────────────
 #  Chargement msg_id catalogue au démarrage
