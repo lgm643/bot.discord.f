@@ -59,8 +59,21 @@ ALLOWED_CMD_CHANNELS = {703342923634180137, 703349716183941162}
 # ── Salons marché ─────────────────────────────────────────────
 MARCHE_CATALOGUE_SALON_ID = 1491139336199082175  # salon catalogue (lecture seule / !stock éphémère)
 MARCHE_COMMANDES_SALON_ID = 1491140888645210142  # salon commandes (tout le monde peut parler)
-MARCHE_CMD_SALONS         = {703342923634180137, MARCHE_COMMANDES_SALON_ID}  # salons où vendeurs/staff-market peuvent utiliser !catalogue etc.
-STAFF_MARKET_ROLE_ID      = 1491142044561707159  # Staff Market (même ID que vendeur certifié)
+MARCHE_CMD_SALONS         = {703342923634180137, 703349716183941162, MARCHE_COMMANDES_SALON_ID}  # salons où vendeurs/staff-market peuvent utiliser !catalogue etc.
+STAFF_MARKET_ROLE_ID      = 1491141720820289677  # Staff Market (rôle distinct)
+
+# Rôles autorités pour !cataloguesuppall (Officier et grades supérieurs)
+CATALOGUESUPPALL_ROLE_IDS = {
+    703344242017173524,   # Officier
+    706808147796426783,   # Leader
+    703340009327034509,   # Perm +
+    703339900929441803,   # Perm ++
+    854479553719959563,   # OP LGM
+}
+
+# Lock catalogue (concurrence)
+import asyncio as _asyncio_import
+_catalogue_lock = _asyncio_import.Lock()
 
 SPAM_LIMIT  = 4
 SPAM_WINDOW = 6.0
@@ -79,7 +92,7 @@ EXEMPT_COMMANDS = {
     "classement", "top", "leaderboard",
     "giveaway", "gw",
     "pub",
-    "say", "dit", "fermer", "stock", "recherche",
+    "say", "dit", "fermer", "stock", "recherche", "vendu", "cataloguesuppall", "vendu", "cataloguesuppall",
     "help", "aide", "commandes",
     "info",
 }
@@ -1927,7 +1940,8 @@ async def help_cmd(ctx):
                 "`!unmute @membre` — Unmute\n"
                 "`!effacer <n>` — Supprime n messages\n"
                 "`!roster` — Met à jour le roster\n"
-                "`!say / !dit #salon message` — Fait parler le bot"
+                "`!say / !dit #salon message` — Fait parler le bot\n"
+                "`!cataloguesuppall` — Vide tout le catalogue (Officier+)"
             ),
             inline=False
         )
@@ -1974,10 +1988,13 @@ ROLE_CHANNEL_ID       = 1491144873632469154   # salon pour embed toggle rôle
 
 CATALOGUE_FILE        = "/app/data/catalogue_data.json"
 COMMANDE_CATEGORY_ID  = 1491137188333883586
-VENTES_LOG_CHANNEL_ID = 1491139336199082175  # salon logs des ventes (même que catalogue ou à changer)  # catégorie tickets commandes
+VENTES_LOG_CHANNEL_ID = 713166766229946418   # salon logs des ventes (LOG_CHANNEL_ID)
 
 # ID du message catalogue (persisté entre les restarts)
 _catalogue_msg_id: int | None = None
+
+# Lock pour éviter les race conditions sur le catalogue
+_catalogue_lock = asyncio.Lock()
 
 
 # ─────────────────────────────────────────────
@@ -2003,6 +2020,13 @@ def save_catalogue(data: dict):
         os.replace(tmp, CATALOGUE_FILE)
     except Exception as e:
         print(f"[CATALOGUE] Erreur sauvegarde : {e}")
+
+
+def is_cataloguesuppall_authorized(member: discord.Member) -> bool:
+    """Vérifie si le membre peut utiliser !cataloguesuppall (Officier et grades supérieurs)."""
+    if member.guild_permissions.administrator:
+        return True
+    return any(r.id in CATALOGUESUPPALL_ROLE_IDS for r in member.roles)
 
 
 def is_vendeur(member: discord.Member) -> bool:
@@ -2081,6 +2105,9 @@ async def send_notif(guild: discord.Guild, texte: str):
 # ─────────────────────────────────────────────
 #  Commandes catalogue
 # ─────────────────────────────────────────────
+MAX_QTY   = 100_000_000
+MAX_ITEMS = 50  # max items par vendeur
+
 @bot.command(name="catalogue")
 async def catalogue_cmd(ctx, nom: str = None, quantite: str = None, *, prix: str = None):
     """Ajoute un item au catalogue. Réservé aux vendeurs certifiés."""
@@ -2098,26 +2125,49 @@ async def catalogue_cmd(ctx, nom: str = None, quantite: str = None, *, prix: str
         await ctx.send("❌ La quantité doit être un nombre entier positif.", delete_after=6)
         return
 
-    data = load_catalogue()
-    items = data.get("items", {})
-    nom_key = nom.lower()
+    if qty > MAX_QTY:
+        await ctx.send(f"❌ Quantité maximum : **{MAX_QTY:,}**.", delete_after=6)
+        return
 
-    if nom_key in items:
-        # Mise à jour si item existant
-        items[nom_key]["quantite"] += qty
-        items[nom_key]["prix"]     = prix
-        action = f"✏️ **{nom}** mis à jour — stock : {items[nom_key]['quantite']} | prix : {prix}"
-    else:
-        items[nom_key] = {
-            "nom":        nom,
-            "quantite":   qty,
-            "prix":       prix,
-            "vendeur_id": ctx.author.id,
-        }
-        action = f"➕ **{nom}** ajouté — stock : {qty} | prix : {prix} | vendeur : {ctx.author.mention}"
+    if len(nom) > 40:
+        await ctx.send("❌ Nom trop long (max 40 caractères).", delete_after=6)
+        return
 
-    data["items"] = items
-    save_catalogue(data)
+    async with _catalogue_lock:
+        data  = load_catalogue()
+        items = data.get("items", {})
+        nom_key = nom.lower()
+
+        # Vérifie limite par vendeur (hors staff)
+        if not is_staff(ctx.author) and nom_key not in items:
+            items_du_vendeur = sum(1 for v in items.values() if v.get("vendeur_id") == ctx.author.id)
+            if items_du_vendeur >= MAX_ITEMS:
+                await ctx.send(f"❌ Tu as atteint la limite de **{MAX_ITEMS}** articles.", delete_after=6)
+                return
+
+        if nom_key in items:
+            # Seul le propriétaire ou staff peut modifier
+            if items[nom_key].get("vendeur_id") != ctx.author.id and not is_staff(ctx.author):
+                await ctx.send("❌ Cet article appartient à un autre vendeur.", delete_after=6)
+                return
+            new_stock = items[nom_key]["quantite"] + qty
+            if new_stock > MAX_QTY:
+                await ctx.send(f"❌ Stock total dépasserait la limite de **{MAX_QTY:,}**.", delete_after=6)
+                return
+            items[nom_key]["quantite"] = new_stock
+            items[nom_key]["prix"]     = prix
+            action = f"✏️ **{nom}** mis à jour — stock : {new_stock} | prix : {prix}"
+        else:
+            items[nom_key] = {
+                "nom":        nom,
+                "quantite":   qty,
+                "prix":       prix,
+                "vendeur_id": ctx.author.id,
+            }
+            action = f"➕ **{nom}** ajouté — stock : {qty} | prix : {prix} | vendeur : {ctx.author.mention}"
+
+        data["items"] = items
+        save_catalogue(data)
 
     await update_catalogue_message(ctx.guild, items)
     await send_notif(ctx.guild, action)
@@ -2125,29 +2175,35 @@ async def catalogue_cmd(ctx, nom: str = None, quantite: str = None, *, prix: str
 
 
 @bot.command(name="cataloguesupp")
-async def cataloguesupp_cmd(ctx, nom: str = None, pseudo: str = None):
-    """Supprime un item du catalogue. Réservé aux vendeurs certifiés."""
+async def cataloguesupp_cmd(ctx, nom: str = None):
+    """Supprime un item du catalogue. Réservé aux vendeurs certifiés (uniquement leurs propres items)."""
     if not is_vendeur(ctx.author):
         await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5)
         return
     if nom is None:
-        await ctx.send("❌ Utilisation : `!cataloguesupp [nom] [pseudo_optionnel]`", delete_after=8)
+        await ctx.send("❌ Utilisation : `!cataloguesupp [nom]`", delete_after=8)
         return
 
-    data     = load_catalogue()
-    items    = data.get("items", {})
-    nom_key  = nom.lower()
+    async with _catalogue_lock:
+        data    = load_catalogue()
+        items   = data.get("items", {})
+        nom_key = nom.lower()
 
-    if nom_key not in items:
-        await ctx.send(f"❌ Article **{nom}** introuvable dans le catalogue.", delete_after=6)
-        return
+        if nom_key not in items:
+            await ctx.send(f"❌ Article **{nom}** introuvable dans le catalogue.", delete_after=6)
+            return
 
-    del items[nom_key]
-    data["items"] = items
-    save_catalogue(data)
+        # Vérification propriétaire (staff peut supprimer n'importe quoi)
+        if items[nom_key].get("vendeur_id") != ctx.author.id and not is_staff(ctx.author):
+            await ctx.send("❌ Tu ne peux supprimer que tes propres articles.", delete_after=6)
+            return
+
+        del items[nom_key]
+        data["items"] = items
+        save_catalogue(data)
 
     await update_catalogue_message(ctx.guild, items)
-    await send_notif(ctx.guild, f"🗑️ **{nom}** supprimé du catalogue par {ctx.author.mention}" + (f" (pseudo : {pseudo})" if pseudo else ""))
+    await send_notif(ctx.guild, f"🗑️ **{nom}** supprimé du catalogue par {ctx.author.display_name}")
     await ctx.send(f"✅ **{nom}** supprimé du catalogue.", delete_after=8)
 
 
@@ -2286,7 +2342,7 @@ class CommandeSelect(discord.ui.Select):
                 name=f"cmd-{acheteur.display_name[:18]}-{item['nom'][:10]}",
                 category=category,
                 overwrites=overwrites,
-                topic=f"commande|{nom_key}|{qty}|{item['vendeur_id']}"
+                topic=f"commande|{nom_key}|{qty}|{item['vendeur_id']}|{acheteur.id}"
             )
 
             # Calcul prix total si numérique possible
@@ -2394,50 +2450,122 @@ async def commande_cmd(ctx):
     await ctx.send(embed=embed, view=CommandeView(items))
 
 
-# ─────────────────────────────────────────────
-#  Logs messages dans salon commande (lecture seule)
-#  Supprime tout message utilisateur dans les salons de commande
-# ─────────────────────────────────────────────
-@bot.event
-async def on_message_in_commande(message: discord.Message):
-    """Supprime instantanément tout message d'un utilisateur dans un salon commande."""
-    if message.author.bot or not message.guild:
-        return
-    # Détecte les salons commande (commencent par "cmd-")
-    if message.channel.name.startswith("cmd-") or (
-        message.channel.category and message.channel.category.id == COMMANDE_CATEGORY_ID
-        and not message.channel.name.startswith("commande|")
-    ):
-        # Autorise uniquement le bot et le wait_for en cours (messages numériques attendus)
-        # Les messages de commandes (!vendu etc.) sont traités ailleurs
-        if not message.content.startswith("!"):
-            # Message numérique attendu par wait_for → ne pas supprimer
-            # (le wait_for le supprime lui-même après lecture)
-            pass
-        # Les autres messages non-bots, non-commandes → supprimés
-        # Note : on ne supprime PAS ici pour ne pas casser le wait_for.
-        # La suppression des messages non attendus est gérée par on_message_delete logs.
-    pass
+# on_message gère déjà la suppression dans les salons commande (voir on_message)
 
 
 # ─────────────────────────────────────────────
 #  Commande !vendu
 # ─────────────────────────────────────────────
+
+async def _fermer_ticket_delayed(guild: discord.Guild, channel_id: int, raison: str, delai: int = 10):
+    """Ferme un ticket après délai — exécuté en tâche séparée, ne bloque pas l'interaction."""
+    await asyncio.sleep(delai)
+    ch = guild.get_channel(channel_id)
+    if ch:
+        try:
+            await ch.delete(reason=raison)
+        except Exception:
+            pass
+
+
+def _acheteur_id_depuis_topic(topic: str) -> int | None:
+    """Extrait l'acheteur_id depuis le topic du ticket si présent."""
+    # topic format: commande|nom_key|qty|vendeur_id|acheteur_id (optionnel)
+    if not topic:
+        return None
+    parts = topic.split("|")
+    if len(parts) >= 5:
+        try:
+            return int(parts[4])
+        except ValueError:
+            pass
+    return None
+
+
+async def _log_vente_complete(
+    guild: discord.Guild,
+    acheteur_id,
+    vendeur_id: int,
+    nom: str,
+    quantite: int,
+    prix_unitaire: str,
+    statut: str = "vendu"   # "vendu" ou "annule"
+):
+    """Log dans 713166766229946418 avec pseudos réels et statut."""
+    log_ch = guild.get_channel(LOG_CHANNEL_ID)
+    if not log_ch:
+        try:
+            log_ch = await guild.fetch_channel(LOG_CHANNEL_ID)
+        except Exception:
+            return
+
+    # Calcul prix total
+    prix_total_str = "?"
+    try:
+        import re as _re_log
+        nums = _re_log.findall(r"\d+(?:[.,]\d+)?", prix_unitaire)
+        if nums:
+            unit_val  = float(nums[0].replace(",", "."))
+            total_val = unit_val * quantite
+            prix_total_str = str(int(total_val)) if total_val == int(total_val) else f"{total_val:.2f}"
+    except Exception:
+        pass
+
+    # Résolution des pseudos (displayName, pas l'ID brut)
+    acheteur_m = guild.get_member(acheteur_id) if acheteur_id else None
+    vendeur_m  = guild.get_member(vendeur_id)
+
+    acheteur_str = acheteur_m.display_name if acheteur_m else (f"<@{acheteur_id}>" if acheteur_id else "Inconnu")
+    vendeur_str  = vendeur_m.display_name  if vendeur_m  else f"<@{vendeur_id}>"
+
+    if statut == "vendu":
+        title      = "💸 Vente confirmée"
+        color      = 0x2ECC71
+        statut_str = "✅ Vendu"
+    else:
+        title      = "🚫 Vente annulée"
+        color      = 0xE74C3C
+        statut_str = "❌ Annulée"
+
+    embed = discord.Embed(title=title, color=color, timestamp=now_utc())
+    embed.add_field(name="🔹 Article",    value=nom,        inline=True)
+    embed.add_field(name="📦 Quantité",   value=str(quantite), inline=True)
+    embed.add_field(name="📋 Statut",     value=statut_str, inline=True)
+    if statut == "vendu":
+        embed.add_field(name="💰 Prix unit.", value=prix_unitaire, inline=True)
+        embed.add_field(name="🧾 Prix total", value=f"{quantite} × {prix_unitaire} = **{prix_total_str}**", inline=True)
+        embed.add_field(name="​",        value="​",      inline=True)
+    embed.add_field(name="🛒 Acheteur",   value=acheteur_str, inline=True)
+    embed.add_field(name="👤 Vendeur",    value=vendeur_str,  inline=True)
+    embed.add_field(name="🕐 Date",       value=now_str(),    inline=False)
+    embed.set_footer(text="Historique des ventes — La Mystic Market")
+    await log_ch.send(embed=embed)
+
+
 class VenduView(discord.ui.View):
+    """
+    View persistante (timeout=None + custom_id fixes).
+    Survit aux restarts via bot.add_view(VenduView(0,"",0,0)) dans on_ready.
+    """
     def __init__(self, vendeur_id: int, nom_key: str, quantite: int, ticket_channel_id: int):
-        super().__init__(timeout=600)  # 10 minutes
-        self.vendeur_id       = vendeur_id
-        self.nom_key          = nom_key
-        self.quantite         = quantite
+        super().__init__(timeout=None)   # ← PERSISTANT
+        self.vendeur_id        = vendeur_id
+        self.nom_key           = nom_key
+        self.quantite          = quantite
         self.ticket_channel_id = ticket_channel_id
-        self.done             = False
+        self.done              = False
 
     def _disable_all(self):
         for child in self.children:
             child.disabled = True
 
-    @discord.ui.button(label="✅ Vendu", style=discord.ButtonStyle.green)
-    async def vendu(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(
+        label="✅ Vendu",
+        style=discord.ButtonStyle.green,
+        custom_id="vendu_confirmer"   # ← custom_id fixe
+    )
+    async def vendu_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Vérif AVANT defer pour pouvoir envoyer ephemeral si refus
         if interaction.user.id != self.vendeur_id and not is_staff(interaction.user):
             await interaction.response.send_message("❌ Seul le vendeur peut valider.", ephemeral=True)
             return
@@ -2448,78 +2576,83 @@ class VenduView(discord.ui.View):
         self._disable_all()
         self.stop()
 
-        # Defer immédiat pour éviter "interaction failed"
         await interaction.response.defer()
 
-        guild = interaction.guild
-        data  = load_catalogue()
-        items = data.get("items", {})
-
-        # Récupère le nom avant modification
-        nom_affiche = items[self.nom_key]["nom"] if self.nom_key in items else self.nom_key
-
-        # Récupère infos ticket pour le log
+        guild     = interaction.guild
         ticket_ch = guild.get_channel(self.ticket_channel_id)
-        ticket_topic = ticket_ch.topic if ticket_ch else ""
-        acheteur_id = None
-        prix_item = ""
-        if ticket_ch:
-            # Cherche l'acheteur dans les permissions du salon
-            for target, overwrite in ticket_ch.overwrites.items():
-                if isinstance(target, discord.Member) and target.id != interaction.user.id and not target.bot:
+
+        # Récupère acheteur_id depuis le topic (fiable)
+        topic        = ticket_ch.topic if ticket_ch else ""
+        acheteur_id  = _acheteur_id_depuis_topic(topic)
+        # Fallback : parcourt les overwrites si pas dans le topic
+        if acheteur_id is None and ticket_ch:
+            for target, ow in ticket_ch.overwrites.items():
+                if (isinstance(target, discord.Member)
+                        and target.id != self.vendeur_id
+                        and not target.bot
+                        and ow.view_channel):
                     acheteur_id = target.id
                     break
 
-        if self.nom_key in items:
-            prix_item = items[self.nom_key].get("prix", "?")
-            items[self.nom_key]["quantite"] -= self.quantite
-            if items[self.nom_key]["quantite"] <= 0:
-                del items[self.nom_key]
-                await send_notif(guild, f"📭 **{nom_affiche}** épuisé et retiré du catalogue.")
-            data["items"] = items
-            save_catalogue(data)
-            await update_catalogue_message(guild, items)
+        # Met à jour le catalogue avec lock
+        nom_affiche = self.nom_key
+        prix_item   = "?"
+        items_snapshot = {}
+        async with _catalogue_lock:
+            data  = load_catalogue()
+            items = data.get("items", {})
+            items_snapshot = dict(items)
+            if self.nom_key in items:
+                nom_affiche = items[self.nom_key]["nom"]
+                prix_item   = items[self.nom_key].get("prix", "?")
+                items[self.nom_key]["quantite"] -= self.quantite
+                if items[self.nom_key]["quantite"] <= 0:
+                    del items[self.nom_key]
+                    asyncio.create_task(
+                        send_notif(guild, f"📭 **{nom_affiche}** épuisé et retiré du catalogue.")
+                    )
+                data["items"] = items
+                save_catalogue(data)
+                items_snapshot = dict(items)
 
-        # ── Log de vente ──
-        await _log_vente(
+        await update_catalogue_message(guild, items_snapshot)
+
+        # Log vente (713166766229946418)
+        await _log_vente_complete(
             guild=guild,
             acheteur_id=acheteur_id,
-            vendeur=interaction.user,
+            vendeur_id=self.vendeur_id,
             nom=nom_affiche,
             quantite=self.quantite,
-            prix_unitaire=prix_item
+            prix_unitaire=prix_item,
+            statut="vendu"
         )
 
-        # Donne le rôle "vendu"
+        # Donne le rôle VENDU à l'ACHETEUR
         vendu_role = guild.get_role(VENDU_ROLE_ID)
-        if vendu_role:
-            try:
-                acheteur_member = guild.get_channel(self.ticket_channel_id)
-                # Donne le rôle au vendeur qui confirme
-                await interaction.user.add_roles(vendu_role, reason="Vente confirmée")
-            except Exception as e:
-                print(f"[VENDU] Erreur rôle : {e}")
+        if vendu_role and acheteur_id:
+            acheteur_member = guild.get_member(acheteur_id)
+            if acheteur_member:
+                try:
+                    await acheteur_member.add_roles(vendu_role, reason="Achat confirmé")
+                except Exception as e:
+                    print(f"[VENDU] Erreur rôle acheteur : {e}")
 
         embed = discord.Embed(
             title="✅ Vente confirmée !",
-            description=f"Article : **{nom_affiche}**\nQuantité vendue : **{self.quantite}**",
+            description=f"Article : **{nom_affiche}**\nQuantité vendue : **{self.quantite}**\n\nTicket fermé dans **10 secondes**.",
             color=0x2ECC71,
             timestamp=now_utc()
         )
-        embed.set_footer(text="Ticket fermé automatiquement dans 10 secondes")
         await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=self)
+        asyncio.create_task(_fermer_ticket_delayed(guild, self.ticket_channel_id, "Vente confirmée"))
 
-        # Fermeture automatique du ticket après 10s
-        await asyncio.sleep(10)
-        channel = guild.get_channel(self.ticket_channel_id)
-        if channel:
-            try:
-                await channel.delete(reason="Vente confirmée — fermeture automatique")
-            except Exception:
-                pass
-
-    @discord.ui.button(label="❌ Pas vendu", style=discord.ButtonStyle.red)
-    async def pas_vendu(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(
+        label="❌ Pas vendu",
+        style=discord.ButtonStyle.red,
+        custom_id="vendu_annuler"   # ← custom_id fixe
+    )
+    async def pas_vendu_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.vendeur_id and not is_staff(interaction.user):
             await interaction.response.send_message("❌ Seul le vendeur peut décider.", ephemeral=True)
             return
@@ -2532,23 +2665,44 @@ class VenduView(discord.ui.View):
 
         await interaction.response.defer()
 
+        guild     = interaction.guild
+        ticket_ch = guild.get_channel(self.ticket_channel_id)
+        topic     = ticket_ch.topic if ticket_ch else ""
+        acheteur_id = _acheteur_id_depuis_topic(topic)
+        if acheteur_id is None and ticket_ch:
+            for target, ow in ticket_ch.overwrites.items():
+                if (isinstance(target, discord.Member)
+                        and target.id != self.vendeur_id
+                        and not target.bot
+                        and ow.view_channel):
+                    acheteur_id = target.id
+                    break
+
+        # Récupère infos pour le log
+        data        = load_catalogue()
+        items       = data.get("items", {})
+        nom_affiche = items[self.nom_key]["nom"] if self.nom_key in items else self.nom_key
+        prix_item   = items[self.nom_key].get("prix", "?") if self.nom_key in items else "?"
+
+        # Log annulation
+        await _log_vente_complete(
+            guild=guild,
+            acheteur_id=acheteur_id,
+            vendeur_id=self.vendeur_id,
+            nom=nom_affiche,
+            quantite=self.quantite,
+            prix_unitaire=prix_item,
+            statut="annule"
+        )
+
         embed = discord.Embed(
             title="❌ Vente annulée",
-            description="Le stock n'a pas été modifié.\nTicket fermé automatiquement dans 10 secondes.",
+            description=f"Article : **{nom_affiche}**\nLe stock n'a pas été modifié.\n\nTicket fermé dans **10 secondes**.",
             color=0xE74C3C,
             timestamp=now_utc()
         )
         await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=self)
-
-        # Fermeture automatique du ticket après 10s
-        await asyncio.sleep(10)
-        guild   = interaction.guild
-        channel = guild.get_channel(self.ticket_channel_id)
-        if channel:
-            try:
-                await channel.delete(reason="Vente annulée — fermeture automatique")
-            except Exception:
-                pass
+        asyncio.create_task(_fermer_ticket_delayed(guild, self.ticket_channel_id, "Vente annulée"))
 
 
 @bot.command(name="vendu")
@@ -2645,48 +2799,64 @@ async def role_cmd(ctx):
 
 
 # ─────────────────────────────────────────────
-#  Log des ventes
+#  Log des ventes (salon 713166766229946418)
 # ─────────────────────────────────────────────
-async def _log_vente(guild: discord.Guild, acheteur_id, vendeur: discord.Member,
-                     nom: str, quantite: int, prix_unitaire: str):
-    """Envoie un log de vente dans le salon dédié."""
-    log_ch = guild.get_channel(VENTES_LOG_CHANNEL_ID)
+async def _log_vente(
+    guild: discord.Guild,
+    acheteur_id,
+    vendeur_id: int,
+    vendeur_name: str,
+    nom: str,
+    quantite: int,
+    prix_unitaire: str,
+    statut: str = "vendu"   # "vendu" ou "annule"
+):
+    """Envoie un log de vente dans LOG_CHANNEL_ID (713166766229946418)."""
+    log_ch = guild.get_channel(LOG_CHANNEL_ID)  # 713166766229946418
     if not log_ch:
         try:
-            log_ch = await guild.fetch_channel(VENTES_LOG_CHANNEL_ID)
+            log_ch = await guild.fetch_channel(LOG_CHANNEL_ID)
         except Exception:
             return
 
     # Calcul prix total
-    prix_total_str = ""
+    prix_total_str = "?"
     try:
         import re as _re3
-        nums = _re3.findall(r"[\d]+(?:[.,][\d]+)?", prix_unitaire)
+        nums = _re3.findall(r"\d+(?:[.,]\d+)?", prix_unitaire)
         if nums:
-            unit_val = float(nums[0].replace(",", "."))
+            unit_val  = float(nums[0].replace(",", "."))
             total_val = unit_val * quantite
-            if total_val == int(total_val):
-                prix_total_str = f"{int(total_val)}"
-            else:
-                prix_total_str = f"{total_val:.2f}"
-        else:
-            prix_total_str = f"?"
+            prix_total_str = str(int(total_val)) if total_val == int(total_val) else f"{total_val:.2f}"
     except Exception:
-        prix_total_str = "?"
+        pass
 
-    acheteur_mention = f"<@{acheteur_id}>" if acheteur_id else "Inconnu"
+    # Résolution des membres pour avoir displayName (pas juste l'ID)
+    acheteur_member = guild.get_member(acheteur_id) if acheteur_id else None
+    vendeur_member  = guild.get_member(vendeur_id)
 
-    embed = discord.Embed(
-        title="💸 Vente confirmée",
-        color=0x2ECC71,
-        timestamp=now_utc()
-    )
-    embed.add_field(name="🔹 Article",     value=nom,                                inline=True)
-    embed.add_field(name="📦 Quantité",    value=str(quantite),                      inline=True)
-    embed.add_field(name="💰 Prix unit.",  value=prix_unitaire,                      inline=True)
-    embed.add_field(name="🧾 Prix total",  value=f"{quantite} × {prix_unitaire} = **{prix_total_str}**", inline=False)
-    embed.add_field(name="🛒 Acheteur",   value=acheteur_mention,                   inline=True)
-    embed.add_field(name="👤 Vendeur",    value=vendeur.mention,                    inline=True)
+    acheteur_str = acheteur_member.display_name if acheteur_member else (f"<@{acheteur_id}>" if acheteur_id else "Inconnu")
+    vendeur_str  = vendeur_member.display_name  if vendeur_member  else vendeur_name
+
+    if statut == "vendu":
+        title = "💸 Vente confirmée"
+        color = 0x2ECC71
+        statut_str = "✅ Vendu"
+    else:
+        title = "🚫 Vente annulée"
+        color = 0xE74C3C
+        statut_str = "❌ Annulée"
+
+    embed = discord.Embed(title=title, color=color, timestamp=now_utc())
+    embed.add_field(name="🔹 Article",    value=nom,                                 inline=True)
+    embed.add_field(name="📦 Quantité",   value=str(quantite),                       inline=True)
+    embed.add_field(name="📋 Statut",     value=statut_str,                          inline=True)
+    embed.add_field(name="💰 Prix unit.", value=prix_unitaire,                        inline=True)
+    if statut == "vendu":
+        embed.add_field(name="🧾 Prix total", value=f"{quantite} × {prix_unitaire} = **{prix_total_str}**", inline=True)
+        embed.add_field(name="​",        value="​",                        inline=True)
+    embed.add_field(name="🛒 Acheteur",   value=acheteur_str,                        inline=True)
+    embed.add_field(name="👤 Vendeur",    value=vendeur_str,                         inline=True)
     embed.add_field(name="🕐 Date",       value=now_str(),                           inline=False)
     embed.set_footer(text="Historique des ventes — La Mystic Market")
     await log_ch.send(embed=embed)
@@ -2849,6 +3019,174 @@ async def recherche_cmd(ctx, *, terme: str = None):
         await ctx.send(f"📩 {ctx.author.mention} Résultat envoyé en message privé.", delete_after=6)
     else:
         await ctx.send(embed=embed)
+
+
+# ─────────────────────────────────────────────
+#  !cataloguesuppall — supprime tout le catalogue (Officier+ seulement)
+# ─────────────────────────────────────────────
+class SuppAllConfirmView(discord.ui.View):
+    def __init__(self, author_id: int):
+        super().__init__(timeout=30)
+        self.author_id = author_id
+        self.done      = False
+
+    @discord.ui.button(label="✅ Confirmer la suppression", style=discord.ButtonStyle.red)
+    async def confirmer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Seul l'auteur peut confirmer.", ephemeral=True)
+            return
+        if self.done:
+            await interaction.response.send_message("⚠️ Déjà effectué.", ephemeral=True)
+            return
+        self.done = True
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+        await interaction.response.defer()
+
+        async with _catalogue_lock:
+            data = load_catalogue()
+            data["items"] = {}
+            save_catalogue(data)
+
+        await update_catalogue_message(interaction.guild, {})
+        await send_notif(interaction.guild, f"🗑️ **Catalogue entièrement vidé** par {interaction.user.display_name}")
+        await interaction.followup.edit_message(
+            message_id=interaction.message.id,
+            content="✅ Catalogue entièrement supprimé.",
+            embed=None, view=self
+        )
+
+    @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.grey)
+    async def annuler(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Seul l'auteur peut annuler.", ephemeral=True)
+            return
+        self.done = True
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+        embed = discord.Embed(title="❌ Annulé", description="Le catalogue n'a pas été modifié.", color=0x95A5A6)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+
+
+@bot.command(name="cataloguesuppall")
+async def cataloguesuppall_cmd(ctx):
+    """Supprime l'intégralité du catalogue. Réservé aux Officiers et Leaders UNIQUEMENT."""
+    # Strictement Officier+ — pas vendeur, pas staff market, pas admin sans le rôle
+    if not is_staff(ctx.author):
+        await ctx.send("❌ Commande réservée aux **Officiers et Leaders** uniquement.", delete_after=6)
+        return
+
+    data  = load_catalogue()
+    items = data.get("items", {})
+    nb    = len(items)
+
+    if nb == 0:
+        await ctx.send("📭 Le catalogue est déjà vide.", delete_after=6)
+        return
+
+    embed = discord.Embed(
+        title="⚠️ Suppression totale du catalogue",
+        description=(
+            f"Tu es sur le point de supprimer **{nb} article(s)** du catalogue.\n\n"
+            f"⚠️ Cette action est **irréversible**.\n"
+            f"Es-tu sûr ?"
+        ),
+        color=0xFF6B00
+    )
+    embed.set_footer(text="Confirmation requise • Expire dans 30 secondes")
+    await ctx.send(embed=embed, view=SuppAllConfirmView(ctx.author.id))
+
+# ─────────────────────────────────────────────
+#  !cataloguesuppall — vide tout le catalogue (Officier+ uniquement)
+# ─────────────────────────────────────────────
+class SuppAllView(discord.ui.View):
+    def __init__(self, author_id: int):
+        super().__init__(timeout=30)
+        self.author_id = author_id
+        self.done      = False
+
+    def _disable_all(self):
+        for child in self.children:
+            child.disabled = True
+
+    @discord.ui.button(label="✅ Confirmer — Vider le catalogue", style=discord.ButtonStyle.red)
+    async def confirmer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Seul l'auteur peut confirmer.", ephemeral=True)
+            return
+        if self.done:
+            await interaction.response.send_message("⚠️ Déjà effectué.", ephemeral=True)
+            return
+        self.done = True
+        self._disable_all()
+        self.stop()
+        await interaction.response.defer()
+
+        async with _catalogue_lock:
+            data = load_catalogue()
+            nb   = len(data.get("items", {}))
+            data["items"] = {}
+            save_catalogue(data)
+
+        await update_catalogue_message(interaction.guild, {})
+        await send_notif(interaction.guild, f"🗑️ Catalogue entièrement vidé par **{interaction.user.display_name}** ({nb} article(s) supprimé(s))")
+
+        embed = discord.Embed(
+            title="✅ Catalogue vidé",
+            description=f"**{nb}** article(s) supprimé(s) du catalogue.",
+            color=0x2ECC71,
+            timestamp=now_utc()
+        )
+        await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=self)
+
+    @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.grey)
+    async def annuler(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Seul l'auteur peut annuler.", ephemeral=True)
+            return
+        self.done = True
+        self._disable_all()
+        self.stop()
+        embed = discord.Embed(
+            title="❌ Annulé",
+            description="Le catalogue n'a pas été modifié.",
+            color=0x95A5A6
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_timeout(self):
+        self._disable_all()
+
+
+@bot.command(name="cataloguesuppall")
+async def cataloguesuppall_cmd(ctx):
+    """Vide intégralement le catalogue. Réservé aux Officiers et grades supérieurs UNIQUEMENT."""
+    if not is_cataloguesuppall_authorized(ctx.author):
+        await ctx.send("❌ Commande réservée aux **Officiers et grades supérieurs** uniquement.", delete_after=6)
+        return
+
+    data  = load_catalogue()
+    items = data.get("items", {})
+    nb    = len(items)
+
+    if nb == 0:
+        await ctx.send("📭 Le catalogue est déjà vide.", delete_after=6)
+        return
+
+    embed = discord.Embed(
+        title="⚠️ Suppression totale du catalogue",
+        description=f"Tu es sur le point de supprimer **{nb} article(s)**. Cette action est **irréversible**. Es-tu sûr ?",
+        color=0xFF6B00
+    )
+    embed.set_footer(text="Expire dans 30 secondes sans action")
+    await ctx.send(embed=embed, view=SuppAllView(ctx.author.id))
+
 
 # ─────────────────────────────────────────────
 #  Chargement msg_id catalogue au démarrage
