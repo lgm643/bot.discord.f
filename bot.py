@@ -3397,7 +3397,7 @@ class SuppAllView(discord.ui.View):
         self._disable_all()
 
 
-@bot.command(name="cataloguesuppall")
+
 async def cataloguesuppall_cmd(ctx):
     """Vide intégralement le catalogue. Réservé aux Officiers et grades supérieurs UNIQUEMENT."""
     if not is_cataloguesuppall_authorized(ctx.author):
