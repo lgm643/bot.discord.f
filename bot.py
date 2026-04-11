@@ -150,8 +150,13 @@ def fmt_voice(seconds: float) -> str:
 #  CHECK GLOBAL
 # ─────────────────────────────────────────────
 def is_staff_market(member: discord.Member) -> bool:
-    """Vérifie si le membre est Staff Market ou vendeur certifié."""
-    return any(r.id == STAFF_MARKET_ROLE_ID for r in member.roles) or is_staff(member)
+    """Vérifie si le membre est Staff Market OU vendeur certifié OU Officier+."""
+    member_role_ids = {r.id for r in member.roles}
+    return (
+        1491141720820289677 in member_role_ids   # Staff Market
+        or 1491142044561707159 in member_role_ids # Vendeur certifié
+        or is_staff(member)                       # Officier+
+    )
 
 
 @bot.check
@@ -813,17 +818,21 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
-    # ── Suppression messages dans salons commande (lecture seule) ──
-    if (
-        message.channel.category_id == COMMANDE_CATEGORY_ID
-        and not message.content.startswith("!")
-        and not message.author.guild_permissions.administrator
-    ):
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        return
+    # ── Messages dans les tickets de commande (cmd-*) ──
+    # Les salons cmd-* sont des tickets privés → tout le monde peut parler
+    # On supprime uniquement dans le salon MARCHE_COMMANDES_SALON_ID public (embed !commande)
+    if message.channel.category_id == COMMANDE_CATEGORY_ID:
+        # Si c'est un salon ticket privé (nom commence par cmd-) : laisser parler
+        if message.channel.name.startswith("cmd-"):
+            await bot.process_commands(message)
+            return
+        # Sinon (salon public de la catégorie) : supprimer si non-! non-admin
+        if not message.content.startswith("!") and not message.author.guild_permissions.administrator:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
 
     # ── XP (listener séparé via bot.listen) ──
     await bot.process_commands(message)
@@ -1958,20 +1967,6 @@ async def help_cmd(ctx):
     await ctx.send(embed=embed)
 
 
-@bot.event
-async def on_command_error(ctx: commands.Context, error):
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send(
-            "❌ La commande que tu as entrée n'existe pas. "
-            "Essayez `!help` ou `!commandes` pour voir la liste des commandes disponibles.",
-            delete_after=8
-        )
-    elif isinstance(error, commands.CheckFailure):
-        pass
-    else:
-        print(f"[ERROR] {ctx.command} : {error}")
-
-
 # ═══════════════════════════════════════════════════════════════
 #  SYSTÈME CATALOGUE
 # ═══════════════════════════════════════════════════════════════
@@ -2562,10 +2557,24 @@ class VenduView(discord.ui.View):
     @discord.ui.button(
         label="✅ Vendu",
         style=discord.ButtonStyle.green,
-        custom_id="vendu_confirmer"   # ← custom_id fixe
+        custom_id="vendu_confirmer"
     )
     async def vendu_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Vérif AVANT defer pour pouvoir envoyer ephemeral si refus
+        # Récupère les données depuis le topic (fiable même après restart)
+        topic = interaction.channel.topic if interaction.channel.topic else ""
+        if topic.startswith("commande|"):
+            parts = topic.split("|")
+            if len(parts) >= 4:
+                try:
+                    self.nom_key           = parts[1]
+                    self.quantite          = int(parts[2])
+                    self.vendeur_id        = int(parts[3])
+                    self.ticket_channel_id = interaction.channel.id
+                    if len(parts) >= 5:
+                        pass  # acheteur_id dans parts[4]
+                except (ValueError, IndexError):
+                    pass
+
         if interaction.user.id != self.vendeur_id and not is_staff(interaction.user):
             await interaction.response.send_message("❌ Seul le vendeur peut valider.", ephemeral=True)
             return
@@ -2650,9 +2659,22 @@ class VenduView(discord.ui.View):
     @discord.ui.button(
         label="❌ Pas vendu",
         style=discord.ButtonStyle.red,
-        custom_id="vendu_annuler"   # ← custom_id fixe
+        custom_id="vendu_annuler"
     )
     async def pas_vendu_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Récupère les données depuis le topic (fiable même après restart)
+        topic = interaction.channel.topic if interaction.channel.topic else ""
+        if topic.startswith("commande|"):
+            parts = topic.split("|")
+            if len(parts) >= 4:
+                try:
+                    self.nom_key           = parts[1]
+                    self.quantite          = int(parts[2])
+                    self.vendeur_id        = int(parts[3])
+                    self.ticket_channel_id = interaction.channel.id
+                except (ValueError, IndexError):
+                    pass
+
         if interaction.user.id != self.vendeur_id and not is_staff(interaction.user):
             await interaction.response.send_message("❌ Seul le vendeur peut décider.", ephemeral=True)
             return
@@ -3021,7 +3043,86 @@ async def recherche_cmd(ctx, *, terme: str = None):
         await ctx.send(embed=embed)
 
 
+# ─────────────────────────────────────────────
+#  !cataloguesuppall — supprime tout le catalogue (Officier+ seulement)
+# ─────────────────────────────────────────────
+class SuppAllConfirmView(discord.ui.View):
+    def __init__(self, author_id: int):
+        super().__init__(timeout=30)
+        self.author_id = author_id
+        self.done      = False
 
+    @discord.ui.button(label="✅ Confirmer la suppression", style=discord.ButtonStyle.red)
+    async def confirmer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Seul l'auteur peut confirmer.", ephemeral=True)
+            return
+        if self.done:
+            await interaction.response.send_message("⚠️ Déjà effectué.", ephemeral=True)
+            return
+        self.done = True
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+        await interaction.response.defer()
+
+        async with _catalogue_lock:
+            data = load_catalogue()
+            data["items"] = {}
+            save_catalogue(data)
+
+        await update_catalogue_message(interaction.guild, {})
+        await send_notif(interaction.guild, f"🗑️ **Catalogue entièrement vidé** par {interaction.user.display_name}")
+        await interaction.followup.edit_message(
+            message_id=interaction.message.id,
+            content="✅ Catalogue entièrement supprimé.",
+            embed=None, view=self
+        )
+
+    @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.grey)
+    async def annuler(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Seul l'auteur peut annuler.", ephemeral=True)
+            return
+        self.done = True
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+        embed = discord.Embed(title="❌ Annulé", description="Le catalogue n'a pas été modifié.", color=0x95A5A6)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+
+
+@bot.command(name="cataloguesuppall")
+async def cataloguesuppall_cmd(ctx):
+    """Supprime l'intégralité du catalogue. Réservé aux Officiers et Leaders UNIQUEMENT."""
+    # Strictement Officier+ — pas vendeur, pas staff market, pas admin sans le rôle
+    if not is_staff(ctx.author):
+        await ctx.send("❌ Commande réservée aux **Officiers et Leaders** uniquement.", delete_after=6)
+        return
+
+    data  = load_catalogue()
+    items = data.get("items", {})
+    nb    = len(items)
+
+    if nb == 0:
+        await ctx.send("📭 Le catalogue est déjà vide.", delete_after=6)
+        return
+
+    embed = discord.Embed(
+        title="⚠️ Suppression totale du catalogue",
+        description=(
+            f"Tu es sur le point de supprimer **{nb} article(s)** du catalogue.\n\n"
+            f"⚠️ Cette action est **irréversible**.\n"
+            f"Es-tu sûr ?"
+        ),
+        color=0xFF6B00
+    )
+    embed.set_footer(text="Confirmation requise • Expire dans 30 secondes")
+    await ctx.send(embed=embed, view=SuppAllConfirmView(ctx.author.id))
 
 # ─────────────────────────────────────────────
 #  !cataloguesuppall — vide tout le catalogue (Officier+ uniquement)
@@ -3119,6 +3220,68 @@ async def _restore_catalogue():
     if msg_id:
         _catalogue_msg_id = msg_id
         print(f"[CATALOGUE] msg_id restauré : {msg_id}")
+
+
+
+# ═══════════════════════════════════════════════════════════════
+#  AUTO-SAVE + ON_READY
+# ═══════════════════════════════════════════════════════════════
+async def _auto_save_loop():
+    """Sauvegarde automatique toutes les 5 minutes."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        await asyncio.sleep(300)
+        try:
+            data = load_user_data()
+            save_user_data(data)
+            print(f"[DATA] Auto-save : {len(data)} utilisateurs sauvegardés")
+        except Exception as e:
+            print(f"[DATA] Erreur auto-save : {e}")
+
+
+@bot.event
+async def on_ready():
+    print(f"✅ Mystic Bot connecté : {bot.user}")
+    print(f"   LOG_CHANNEL_ID         = {LOG_CHANNEL_ID}")
+    print(f"   ROSTER_CHANNEL_ID      = {ROSTER_CHANNEL_ID}")
+    print(f"   WELCOME_CHANNEL_ID     = {WELCOME_CHANNEL_ID}")
+    print(f"   VENTES_LOG_CHANNEL_ID  = {VENTES_LOG_CHANNEL_ID}")
+    print(f"   VENDEUR_CERTIFIE_ID    = {VENDEUR_CERTIFIE_ID}")
+    print(f"   STAFF_MARKET_ROLE_ID   = {STAFF_MARKET_ROLE_ID}")
+    print(f"   Anti-spam              : {SPAM_LIMIT} msgs / {SPAM_WINDOW}s")
+
+    # ── Enregistre toutes les vues persistantes ──
+    bot.add_view(TicketView())
+    bot.add_view(RoleToggleView())
+    bot.add_view(VenduView(0, "", 0, 0))   # persistance boutons vendu après restart
+
+    # ── Restaure les parties en cours ──
+    await _restore_games()
+
+    # ── Restaure le message catalogue ──
+    await _restore_catalogue()
+
+    # ── Lance la sauvegarde auto ──
+    asyncio.create_task(_auto_save_loop())
+
+    data = load_user_data()
+    print(f"[READY] {len(data)} utilisateur(s) chargé(s)")
+    print(f"[READY] Bot prêt ✅")
+
+
+@bot.event
+async def on_command_error(ctx: commands.Context, error):
+    if isinstance(error, commands.CommandNotFound):
+        await ctx.send(
+            "❌ Commande introuvable. Utilise `!help` pour voir les commandes disponibles.",
+            delete_after=8
+        )
+    elif isinstance(error, commands.CheckFailure):
+        pass
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ Argument manquant : `{error.param.name}`", delete_after=6)
+    else:
+        print(f"[ERROR] {ctx.command} : {type(error).__name__}: {error}")
 
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
