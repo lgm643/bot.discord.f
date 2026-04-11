@@ -176,9 +176,9 @@ async def check_command_channel(ctx: commands.Context) -> bool:
         if not is_staff_market(ctx.author):
             await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5)
             return False
-        if ctx.channel.id not in MARCHE_CMD_SALONS:
+        if ctx.channel.id != MARCHE_COMMANDES_SALON_ID:
             await ctx.send(
-                f"❌ Utilise cette commande dans <#{list(MARCHE_CMD_SALONS)[0]}> ou <#{list(MARCHE_CMD_SALONS)[1]}>.",
+                f"❌ Tu peux utiliser cette commande uniquement dans <#{MARCHE_COMMANDES_SALON_ID}>.",
                 delete_after=8
             )
             return False
@@ -626,7 +626,7 @@ async def unmute(ctx, member: discord.Member = None):
     await send_log(ctx.guild, embed)
 
 
-@bot.command()
+@bot.command(aliases=["supprimer"])
 async def effacer(ctx, nombre: int = None):
     if not is_staff(ctx.author): await ctx.send("❌ Permission refusée.", delete_after=5); return
     if nombre is None: await ctx.send("❌ `!effacer 10`", delete_after=5); return
@@ -832,6 +832,22 @@ async def on_message(message: discord.Message):
                 await message.delete()
             except Exception:
                 pass
+            return
+
+    # ── Alerte commandes !inconnues dans le salon commandes marché ──
+    if message.channel.id == MARCHE_COMMANDES_SALON_ID and message.content.startswith("!"):
+        cmd_name = message.content[1:].split()[0].lower() if len(message.content) > 1 else ""
+        known = bot.get_command(cmd_name)
+        if not known:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            await message.channel.send(
+                f"❌ {message.author.mention} La commande `!{cmd_name}` n'existe pas. "
+                f"Utilise `!help` pour voir les commandes disponibles.",
+                delete_after=8
+            )
             return
 
     # ── XP (listener séparé via bot.listen) ──
@@ -1842,6 +1858,14 @@ async def classement_cmd(ctx):
     await ctx.send(embed=embed)
 
 
+
+# ─────────────────────────────────────────────
+#  Commande cachée !oil
+# ─────────────────────────────────────────────
+@bot.command(name="oil", hidden=True)
+async def oil_cmd(ctx):
+    await ctx.send("Désolé, mais <@wham8460> a terminé toute la baby oil… ça devient suspect :eyes:")
+
 # ═══════════════════════════════════════════════════════════════
 #  RESTORE AU DÉMARRAGE
 # ═══════════════════════════════════════════════════════════════
@@ -1882,87 +1906,72 @@ bot.remove_command("help")
 
 @bot.command(name="help", aliases=["aide", "commandes"])
 async def help_cmd(ctx):
-    staff = is_staff(ctx.author)
+    staff   = is_staff(ctx.author)
+    vendeur = is_staff_market(ctx.author)
     embed = discord.Embed(
-        title="📖 Aide — Mystic Bot",
-        description="Toutes les commandes disponibles.\n*(🔒 = Officier+ | 🏷️ = Vendeur certifié)*",
+        title="📖 Mystic Bot — Aide",
+        description="*(🔒 = Officier+ | 🏷️ = Vendeur certifié)*",
         color=0x9B59B6
     )
     embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n👤 Général",
+        name="👤 Général",
         value=(
-            "`!info [@membre]` — Infos d'un membre\n"
-            "`!level [@membre]` — Niveau XP et stats\n"
-            "`!classement` — Top 10 serveur\n"
-            "`!pub` — Pub de recrutement\n"
-            "`!help` — Ce message"
+            "`!info [@membre]` — Infos membre\n"
+            "`!level` `(lvl, xp)` — Niveau XP\n"
+            "`!classement` `(top)` — Top 10\n"
+            "`!pub` — Annonce recrutement\n"
+            "`!help` `(aide, commandes)` — Ce message"
         ),
         inline=False
     )
     embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🎫 Tickets",
+        name="🎫 Tickets",
         value=(
             "`!ticket` 🔒 — Panneau tickets\n"
-            "`!fermer` — Ferme le ticket (accessible à tous dans un ticket)"
+            "`!fermer` — Fermer un ticket"
         ),
         inline=False
     )
+    marche_val = (
+        f"`!recherche [item]` — Cherche un article (dans <#{RECHERCHE_SALON_ID}>)\n"
+    )
+    if vendeur:
+        marche_val += (
+            f"`!catalogue [nom] [qté] [prix]` 🏷️ — Ajouter/modifier (dans <#{MARCHE_COMMANDES_SALON_ID}>)\n"
+            f"`!cataloguesupp [nom]` 🏷️ — Supprimer article (dans <#{MARCHE_COMMANDES_SALON_ID}>)\n"
+            "`!stock` `(@joueur)` 🏷️ — Voir son stock\n"
+            "`!vendu` 🏷️ — Confirmer/annuler vente (ticket)\n"
+        )
+    else:
+        marche_val += "`!stock` `(@joueur)` — Voir stock vendeur\n"
+    marche_val += "`!commande` 🔒 — Passer une commande"
+    embed.add_field(name="🏪 Marché", value=marche_val, inline=False)
     embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🏪 Marché — Catalogue",
-        value=(
-            f"`!recherche [item]` — Recherche un article (dans <#{RECHERCHE_SALON_ID}> pour les membres)\n"
-            "`!catalogue [nom] [qté] [prix]` 🏷️ — Ajoute/met à jour un article\n"
-            "`!cataloguesupp [nom]` 🏷️ — Supprime un article\n"
-            "`!stock` 🏷️ — Ton stock personnel"
-        ),
+        name="🔔 Rôles",
+        value="`!role` 🔒 — Notifications marché (toggle)",
         inline=False
     )
     embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🛒 Marché — Commandes",
+        name="🎯 Mini-jeux",
         value=(
-            "`!commande` 🔒 — Menu de commande interactif\n"
-            "`!vendu` 🏷️ — Confirme/annule une vente (dans le ticket)"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🔔 Rôles",
-        value="`!role` 🔒 — Bouton notifications marché",
-        inline=False
-    )
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🎯 Mini-jeux",
-        value=(
-            "**Pendu** : `!pendu` · `!devine [lettre]` · `!mot [mot]` · `!pendustop` 🔒\n"
-            "**Morpion** : `!morpion @joueur` · `!morpionstop` 🔒\n"
-            "**Autres** : `!pileouface` · `!giveaway [durée] [récompense]` 🔒"
+            "`!pendu` · `!devine` · `!mot` · `!pendustop` 🔒\n"
+            "`!morpion @joueur` · `!morpionstop` 🔒\n"
+            "`!pileouface` `(pof)` · `!giveaway` `(gw)` 🔒"
         ),
         inline=False
     )
     if staff:
         embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━\n🔨 Modération 🔒",
+            name="🔨 Modération 🔒",
             value=(
-                "`!ban @membre [raison]` — Bannit\n"
-                "`!kick @membre [raison]` — Expulse\n"
-                "`!mute @membre [raison]` — Mute\n"
-                "`!unmute @membre` — Unmute\n"
-                "`!effacer <n>` — Supprime n messages\n"
-                "`!roster` — Met à jour le roster\n"
-                "`!say / !dit #salon message` — Fait parler le bot\n"
-                "`!cataloguesuppall` — Vide tout le catalogue (Officier+)"
+                "`!ban` · `!kick` · `!mute` · `!unmute`\n"
+                "`!effacer` `(supprimer)` `<n>` — Supprime n messages\n"
+                "`!say` `(dit)` `#salon msg` — Faire parler le bot\n"
+                "`!roster` — Mettre à jour le roster\n"
+                "`!cataloguesuppall` — Vider tout le catalogue"
             ),
             inline=False
         )
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🛡️ Protections auto",
-        value=(
-            "🔗 Anti-liens — Liens supprimés automatiquement\n"
-            "⚡ Anti-spam — +4 msgs en 6s = avertissement puis expulsion\n"
-            "🛡️ Anti-alt — Détection comptes suspects"
-        ),
-        inline=False
-    )
     embed.set_footer(text="🔒 = Officier+ | 🏷️ = Vendeur certifié ou Officier+")
     await ctx.send(embed=embed)
 
@@ -2103,14 +2112,182 @@ async def send_notif(guild: discord.Guild, texte: str):
 MAX_QTY   = 100_000_000
 MAX_ITEMS = 50  # max items par vendeur
 
+# ── Vue de confirmation doublon prix ──────────────────────────
+class CatalogueDoublonView(discord.ui.View):
+    """Proposée quand un item similaire existe déjà à un prix différent."""
+    def __init__(self, ctx, nom: str, nom_key: str, qty: int,
+                 nouveau_prix: str, ancien_prix: str, meme_vendeur: bool):
+        super().__init__(timeout=60)
+        self.ctx          = ctx
+        self.nom          = nom
+        self.nom_key      = nom_key
+        self.qty          = qty
+        self.nouveau_prix = nouveau_prix
+        self.ancien_prix  = ancien_prix
+        self.meme_vendeur = meme_vendeur
+        self.done         = False
+
+    def _disable_all(self):
+        for child in self.children:
+            child.disabled = True
+
+    @discord.ui.button(label="✅ Garder ce prix", style=discord.ButtonStyle.green)
+    async def garder_prix(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message("❌ Ce n'est pas ta commande.", ephemeral=True)
+            return
+        if self.done:
+            await interaction.response.send_message("⚠️ Déjà effectué.", ephemeral=True)
+            return
+        self.done = True
+        self._disable_all()
+        self.stop()
+        await interaction.response.defer()
+        # Applique avec le nouveau_prix tel quel
+        await _appliquer_catalogue(self.ctx, self.nom, self.nom_key,
+                                   self.qty, self.nouveau_prix, interaction)
+
+    @discord.ui.button(label="✏️ Modifier le prix", style=discord.ButtonStyle.blurple)
+    async def modifier_prix(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message("❌ Ce n'est pas ta commande.", ephemeral=True)
+            return
+        if self.done:
+            await interaction.response.send_message("⚠️ Déjà effectué.", ephemeral=True)
+            return
+        self.done = True
+        self._disable_all()
+        self.stop()
+        await interaction.response.defer()
+
+        # Charge le prix actuel pour comparaison
+        data  = load_catalogue()
+        items = data.get("items", {})
+        prix_ref_str  = items[self.nom_key]["prix"] if self.nom_key in items else self.ancien_prix
+
+        # Extrait valeur numérique de référence si possible
+        import re as _re_cat
+        ref_nums = _re_cat.findall(r"\d+(?:[.,]\d+)?", prix_ref_str)
+        prix_ref_val = float(ref_nums[0].replace(",", ".")) if ref_nums else None
+
+        await interaction.followup.send(
+            f"✏️ {self.ctx.author.mention} Entrez le **nouveau prix** pour **{self.nom}** "
+            f"(doit être ≤ prix actuel : **{prix_ref_str}**). Tu as 60 secondes.",
+            ephemeral=True
+        )
+
+        while True:
+            def check(m):
+                return m.author.id == self.ctx.author.id and m.channel.id == self.ctx.channel.id
+            try:
+                msg = await self.ctx.bot.wait_for("message", check=check, timeout=60)
+            except asyncio.TimeoutError:
+                await interaction.followup.send("⏰ Temps écoulé. Opération annulée.", ephemeral=True)
+                return
+
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+
+            nouveau = msg.content.strip()
+            # Extrait valeur numérique du nouveau prix
+            new_nums = _re_cat.findall(r"\d+(?:[.,]\d+)?", nouveau)
+            if new_nums:
+                new_val = float(new_nums[0].replace(",", "."))
+                if new_val > MAX_QTY:
+                    await interaction.followup.send(
+                        f"❌ Prix trop élevé (max {MAX_QTY:,}). Réessaie :", ephemeral=True
+                    )
+                    continue
+                if prix_ref_val is not None and new_val >= prix_ref_val:
+                    await interaction.followup.send(
+                        f"❌ Le prix **{nouveau}** n'est pas inférieur à **{prix_ref_str}**. "
+                        f"Entrez un prix plus bas :", ephemeral=True
+                    )
+                    continue
+            # Applique le nouveau prix
+            await _appliquer_catalogue(self.ctx, self.nom, self.nom_key,
+                                       self.qty, nouveau, interaction)
+            return
+
+    async def on_timeout(self):
+        self._disable_all()
+
+
+async def _appliquer_catalogue(ctx, nom: str, nom_key: str, qty: int,
+                                prix: str, interaction=None):
+    """Applique l'ajout/mise à jour dans le catalogue avec le lock."""
+    async with _catalogue_lock:
+        data  = load_catalogue()
+        items = data.get("items", {})
+
+        if nom_key in items:
+            if items[nom_key].get("vendeur_id") == ctx.author.id:
+                # Même vendeur → additionner les stocks
+                new_stock = items[nom_key]["quantite"] + qty
+                if new_stock > MAX_QTY:
+                    msg = f"❌ Stock total dépasserait la limite de {MAX_QTY:,}."
+                    if interaction:
+                        await interaction.followup.send(msg, ephemeral=True)
+                    else:
+                        await ctx.send(msg, delete_after=6)
+                    return
+                items[nom_key]["quantite"] = new_stock
+                items[nom_key]["prix"]     = prix
+                action = f"✏️ **{nom}** mis à jour — stock : {new_stock} | prix : {prix}"
+            else:
+                # Vendeur différent → entrée séparée impossible (même nom_key),
+                # on bloque sauf staff
+                if not is_staff(ctx.author):
+                    msg = f"❌ Un article nommé **{nom}** existe déjà dans le catalogue."
+                    if interaction:
+                        await interaction.followup.send(msg, ephemeral=True)
+                    else:
+                        await ctx.send(msg, delete_after=6)
+                    return
+                # Staff peut écraser
+                items[nom_key]["quantite"] += qty
+                items[nom_key]["prix"]      = prix
+                action = f"✏️ **{nom}** (staff) mis à jour — stock : {items[nom_key]['quantite']} | prix : {prix}"
+        else:
+            items[nom_key] = {
+                "nom":        nom,
+                "quantite":   qty,
+                "prix":       prix,
+                "vendeur_id": ctx.author.id,
+            }
+            action = f"➕ **{nom}** ajouté — stock : {qty} | prix : {prix} | vendeur : {ctx.author.display_name}"
+
+        data["items"] = items
+        save_catalogue(data)
+        items_copy = dict(items)
+
+    await update_catalogue_message(ctx.guild, items_copy)
+    await send_notif(ctx.guild, action)
+    confirm = f"✅ Catalogue mis à jour : **{nom}** (x{qty} à {prix})"
+    if interaction:
+        await interaction.followup.send(confirm, ephemeral=True)
+    else:
+        await ctx.send(confirm, delete_after=8)
+
+
 @bot.command(name="catalogue")
 async def catalogue_cmd(ctx, nom: str = None, quantite: str = None, *, prix: str = None):
-    """Ajoute un item au catalogue. Réservé aux vendeurs certifiés."""
+    """Ajoute/met à jour un article. Réservé aux vendeurs certifiés."""
     if not is_vendeur(ctx.author):
         await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5)
         return
     if nom is None or quantite is None or prix is None:
-        await ctx.send("❌ Utilisation : `!catalogue [nom] [quantité] [prix]`\nEx : `!catalogue Melon 100 5 émeraudes`", delete_after=10)
+        await ctx.send(
+            f"❌ `!catalogue [nom] [quantité] [prix]`  "
+            f"Ex : `!catalogue Melon 100 5 émeraudes`\n"
+            f"Utilise cette commande dans <#{MARCHE_COMMANDES_SALON_ID}>.",
+            delete_after=10
+        )
+        return
+    if len(nom) > 40:
+        await ctx.send("❌ Nom trop long (max 40 caractères).", delete_after=6)
         return
     try:
         qty = int(quantite)
@@ -2119,55 +2296,80 @@ async def catalogue_cmd(ctx, nom: str = None, quantite: str = None, *, prix: str
     except ValueError:
         await ctx.send("❌ La quantité doit être un nombre entier positif.", delete_after=6)
         return
-
     if qty > MAX_QTY:
         await ctx.send(f"❌ Quantité maximum : **{MAX_QTY:,}**.", delete_after=6)
         return
 
-    if len(nom) > 40:
-        await ctx.send("❌ Nom trop long (max 40 caractères).", delete_after=6)
+    # Vérifie prix numérique
+    import re as _re_cat2
+    prix_nums = _re_cat2.findall(r"\d+(?:[.,]\d+)?", prix)
+    if prix_nums and float(prix_nums[0].replace(",", ".")) > MAX_QTY:
+        await ctx.send(f"❌ Prix trop élevé (max {MAX_QTY:,}).", delete_after=6)
         return
 
-    async with _catalogue_lock:
-        data  = load_catalogue()
-        items = data.get("items", {})
-        nom_key = nom.lower()
+    nom_key = nom.lower()
 
-        # Vérifie limite par vendeur (hors staff)
-        if not is_staff(ctx.author) and nom_key not in items:
-            items_du_vendeur = sum(1 for v in items.values() if v.get("vendeur_id") == ctx.author.id)
-            if items_du_vendeur >= MAX_ITEMS:
-                await ctx.send(f"❌ Tu as atteint la limite de **{MAX_ITEMS}** articles.", delete_after=6)
+    # Charge catalogue pour vérif doublon
+    data  = load_catalogue()
+    items = data.get("items", {})
+
+    # Vérifie limite par vendeur
+    if not is_staff(ctx.author) and nom_key not in items:
+        items_du_vendeur = sum(1 for v in items.values() if v.get("vendeur_id") == ctx.author.id)
+        if items_du_vendeur >= MAX_ITEMS:
+            await ctx.send(f"❌ Tu as atteint la limite de **{MAX_ITEMS}** articles.", delete_after=6)
+            return
+
+    # ── Vérification doublon ──
+    if nom_key in items:
+        existing = items[nom_key]
+        meme_vendeur = existing.get("vendeur_id") == ctx.author.id
+
+        # Propriétaire différent et non-staff → bloqué
+        if not meme_vendeur and not is_staff(ctx.author):
+            await ctx.send(
+                f"❌ Un article nommé **{nom}** existe déjà, "
+                f"vendu par <@{existing['vendeur_id']}> à **{existing['prix']}**.\n"
+                f"Choisis un nom différent pour ton article.",
+                delete_after=10
+            )
+            return
+
+        # Même vendeur ou staff → propose comparaison de prix
+        ancien_prix = existing["prix"]
+        import re as _re_cat3
+        old_nums = _re_cat3.findall(r"\d+(?:[.,]\d+)?", ancien_prix)
+        new_nums = _re_cat3.findall(r"\d+(?:[.,]\d+)?", prix)
+
+        if old_nums and new_nums:
+            old_val = float(old_nums[0].replace(",", "."))
+            new_val = float(new_nums[0].replace(",", "."))
+            if new_val > old_val and meme_vendeur:
+                # Propose de garder ou modifier
+                vendeur_m = ctx.guild.get_member(existing["vendeur_id"])
+                vendeur_str = vendeur_m.display_name if vendeur_m else f"<@{existing['vendeur_id']}>"
+                embed = discord.Embed(
+                    title=f"⚠️ Article existant : {nom}",
+                    description=(
+                        f"Cet article est déjà dans le catalogue à **{ancien_prix}** "
+                        f"(vendeur : **{vendeur_str}**).\n\n"
+                        f"Le prix que tu proposes (**{prix}**) est **plus élevé**.\n"
+                        f"Veux-tu garder ce prix ou en choisir un plus bas ?"
+                    ),
+                    color=0xF1C40F
+                )
+                await ctx.send(
+                    embed=embed,
+                    view=CatalogueDoublonView(ctx, nom, nom_key, qty, prix, ancien_prix, meme_vendeur)
+                )
                 return
 
-        if nom_key in items:
-            # Seul le propriétaire ou staff peut modifier
-            if items[nom_key].get("vendeur_id") != ctx.author.id and not is_staff(ctx.author):
-                await ctx.send("❌ Cet article appartient à un autre vendeur.", delete_after=6)
-                return
-            new_stock = items[nom_key]["quantite"] + qty
-            if new_stock > MAX_QTY:
-                await ctx.send(f"❌ Stock total dépasserait la limite de **{MAX_QTY:,}**.", delete_after=6)
-                return
-            items[nom_key]["quantite"] = new_stock
-            items[nom_key]["prix"]     = prix
-            action = f"✏️ **{nom}** mis à jour — stock : {new_stock} | prix : {prix}"
-        else:
-            items[nom_key] = {
-                "nom":        nom,
-                "quantite":   qty,
-                "prix":       prix,
-                "vendeur_id": ctx.author.id,
-            }
-            action = f"➕ **{nom}** ajouté — stock : {qty} | prix : {prix} | vendeur : {ctx.author.mention}"
+        # Prix inférieur ou non numérique → appliquer directement
+        await _appliquer_catalogue(ctx, nom, nom_key, qty, prix)
+        return
 
-        data["items"] = items
-        save_catalogue(data)
-
-    await update_catalogue_message(ctx.guild, items)
-    await send_notif(ctx.guild, action)
-    await ctx.send(f"✅ Catalogue mis à jour : **{nom}** (x{qty} à {prix})", delete_after=8)
-
+    # ── Pas de doublon : ajout direct ──
+    await _appliquer_catalogue(ctx, nom, nom_key, qty, prix)
 
 @bot.command(name="cataloguesupp")
 async def cataloguesupp_cmd(ctx, nom: str = None):
@@ -2402,22 +2604,31 @@ class CommandeView(discord.ui.View):
             self.add_item(CommandeSelect(items))
 
     @discord.ui.button(
-        label="🔄 Rafraîchir le catalogue",
+        label="🔄 Rafraîchir",
         style=discord.ButtonStyle.grey,
         row=1,
         custom_id="commande_refresh"
     )
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Recrée la view avec les items à jour sans modifier l'embed."""
+        """Recrée la view avec les articles à jour (select menu mis à jour)."""
         await interaction.response.defer(ephemeral=True, thinking=False)
         data  = load_catalogue()
         items = data.get("items", {})
         if not items:
             await interaction.followup.send("📭 Le catalogue est vide pour l'instant.", ephemeral=True)
+            # Met quand même à jour la view pour refléter l'état vide
+            try:
+                await interaction.message.edit(view=CommandeView({}))
+            except Exception:
+                pass
             return
-        # Remplace uniquement la view (pas l'embed) → ne casse rien
-        await interaction.message.edit(view=CommandeView(items))
-        await interaction.followup.send("✅ Catalogue rafraîchi !", ephemeral=True)
+        # Recrée la view complète (select menu + bouton) avec les données fraîches
+        new_view = CommandeView(items)
+        await interaction.message.edit(view=new_view)
+        await interaction.followup.send(
+            f"✅ Catalogue rafraîchi — **{len(items)}** article(s) disponible(s).",
+            ephemeral=True
+        )
 
 
 @bot.command(name="commande")
@@ -3043,6 +3254,86 @@ async def recherche_cmd(ctx, *, terme: str = None):
         await ctx.send(embed=embed)
 
 
+# ─────────────────────────────────────────────
+#  !cataloguesuppall — supprime tout le catalogue (Officier+ seulement)
+# ─────────────────────────────────────────────
+class SuppAllConfirmView(discord.ui.View):
+    def __init__(self, author_id: int):
+        super().__init__(timeout=30)
+        self.author_id = author_id
+        self.done      = False
+
+    @discord.ui.button(label="✅ Confirmer la suppression", style=discord.ButtonStyle.red)
+    async def confirmer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Seul l'auteur peut confirmer.", ephemeral=True)
+            return
+        if self.done:
+            await interaction.response.send_message("⚠️ Déjà effectué.", ephemeral=True)
+            return
+        self.done = True
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+        await interaction.response.defer()
+
+        async with _catalogue_lock:
+            data = load_catalogue()
+            data["items"] = {}
+            save_catalogue(data)
+
+        await update_catalogue_message(interaction.guild, {})
+        await send_notif(interaction.guild, f"🗑️ **Catalogue entièrement vidé** par {interaction.user.display_name}")
+        await interaction.followup.edit_message(
+            message_id=interaction.message.id,
+            content="✅ Catalogue entièrement supprimé.",
+            embed=None, view=self
+        )
+
+    @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.grey)
+    async def annuler(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Seul l'auteur peut annuler.", ephemeral=True)
+            return
+        self.done = True
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+        embed = discord.Embed(title="❌ Annulé", description="Le catalogue n'a pas été modifié.", color=0x95A5A6)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+
+
+@bot.command(name="cataloguesuppall")
+async def cataloguesuppall_cmd(ctx):
+    """Supprime l'intégralité du catalogue. Réservé aux Officiers et Leaders UNIQUEMENT."""
+    # Strictement Officier+ — pas vendeur, pas staff market, pas admin sans le rôle
+    if not is_staff(ctx.author):
+        await ctx.send("❌ Commande réservée aux **Officiers et Leaders** uniquement.", delete_after=6)
+        return
+
+    data  = load_catalogue()
+    items = data.get("items", {})
+    nb    = len(items)
+
+    if nb == 0:
+        await ctx.send("📭 Le catalogue est déjà vide.", delete_after=6)
+        return
+
+    embed = discord.Embed(
+        title="⚠️ Suppression totale du catalogue",
+        description=(
+            f"Tu es sur le point de supprimer **{nb} article(s)** du catalogue.\n\n"
+            f"⚠️ Cette action est **irréversible**.\n"
+            f"Es-tu sûr ?"
+        ),
+        color=0xFF6B00
+    )
+    embed.set_footer(text="Confirmation requise • Expire dans 30 secondes")
+    await ctx.send(embed=embed, view=SuppAllConfirmView(ctx.author.id))
 
 # ─────────────────────────────────────────────
 #  !cataloguesuppall — vide tout le catalogue (Officier+ uniquement)
