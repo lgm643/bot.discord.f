@@ -62,7 +62,15 @@ DEFAULT_CONFIG = {
     "spam_limit":           4,
     "spam_window":          6.0,
 
-    # Roster (liste ordonnée de rôles à afficher avec emoji)
+    # Clés individuelles roster (utilisées dans !config pour résolution par nom)
+    "role_roster_leader":    "Leader",
+    "role_roster_officier":  "Officier",
+    "role_roster_confiance": "Membre de confiance",
+    "role_roster_plus":      "Membre +",
+    "role_roster_membre":    "Membre",
+    "role_roster_recrue":    "Recrue",
+
+    # Roster (ordre d affichage + emojis, généré depuis les clés ci-dessus)
     "roster_roles": [
         {"nom": "Leader",             "emoji": "👑"},
         {"nom": "Officier",           "emoji": "⚔️"},
@@ -584,16 +592,25 @@ async def send_ticket_log(guild, ticket_channel, closer):
 # ═══════════════════════════════════════════════════════════════
 
 def build_roster_embed(guild: discord.Guild) -> discord.Embed:
-    cfg         = load_config(guild.id)
-    roster_cfg  = cfg.get("roster_roles", [])
-    categories  = {}
+    cfg = load_config(guild.id)
+
+    # Ordre fixe des entrées du roster avec leur clé config et emoji
+    ROSTER_ENTRIES = [
+        ("role_roster_leader",    "👑"),
+        ("role_roster_officier",  "⚔️"),
+        ("role_roster_confiance", "🛡️"),
+        ("role_roster_plus",      "⭐"),
+        ("role_roster_membre",    "🔹"),
+        ("role_roster_recrue",    "🌱"),
+    ]
+
+    categories   = {}
     ordered_keys = []
-    for entry in roster_cfg:
-        nom   = entry["nom"]
-        emoji = entry.get("emoji", "🔹")
-        role  = resolve_role(guild, nom)
+    for cfg_key, emoji in ROSTER_ENTRIES:
+        nom  = cfg.get(cfg_key, "")
+        role = resolve_role(guild, nom) if nom else None
         if role:
-            categories[role.id] = {"label": f"{emoji} {nom}", "members": []}
+            categories[role.id] = {"label": f"{emoji} {role.name}", "members": []}
             ordered_keys.append(role.id)
 
     for member in guild.members:
@@ -3237,6 +3254,14 @@ CONFIG_GROUPS = {
     "📁 Catégories": [
         ("categorie_tickets",   "🎫 Catégorie tickets",          False),
         ("categorie_commandes", "📦 Catégorie commandes",        False),
+    ],
+    "🎖️ Roster": [
+        ("role_roster_leader",    "👑 Leader (roster)",             False),
+        ("role_roster_officier",  "⚔️ Officier (roster)",          False),
+        ("role_roster_confiance", "🛡️ Membre de confiance (roster)",False),
+        ("role_roster_plus",      "⭐ Membre + (roster)",           False),
+        ("role_roster_membre",    "🔹 Membre (roster)",             False),
+        ("role_roster_recrue",    "🌱 Recrue (roster)",             False),
     ],
     "⚙️ Sécurité": [
         ("alt_min_days",     "🛡️ Anti-alt : âge minimum (jours)", False),
