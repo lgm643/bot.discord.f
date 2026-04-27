@@ -710,7 +710,7 @@ class FermerView(discord.ui.View):
 # ═══════════════════════════════════════════════════════════════
 
 async def creer_ticket(interaction: discord.Interaction, type_ticket: str):
-    guild      = interaction.guild
+    guild       = interaction.guild
     staff_roles = cfg_roles(guild, "role_staff")
     recruteur   = cfg_role(guild, "role_recruteur")
     category    = cfg_category(guild, "categorie_tickets")
@@ -719,10 +719,10 @@ async def creer_ticket(interaction: discord.Interaction, type_ticket: str):
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
         interaction.user:   discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
-    # Le staff peut toujours voir les tickets
+    # Le staff peut toujours voir tous les tickets
     for r in staff_roles:
         overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-    # Le recruteur voit aussi les tickets de recrutement
+    # Le recruteur voit les tickets de recrutement
     if recruteur and type_ticket == "recrutement":
         overwrites[recruteur] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
 
@@ -732,12 +732,10 @@ async def creer_ticket(interaction: discord.Interaction, type_ticket: str):
         overwrites=overwrites
     )
 
-    # Mentions dans le ticket
-    staff_mention     = " ".join(r.mention for r in staff_roles) or "@Staff"
-    recruteur_mention = recruteur.mention if recruteur and type_ticket == "recrutement" else ""
-    ping              = f"{recruteur_mention} {staff_mention}".strip() if type_ticket == "recrutement" else staff_mention
-
+    # Ticket recrutement → ping recruteur UNIQUEMENT
+    # Ticket autre demande → ping staff UNIQUEMENT
     if type_ticket == "recrutement":
+        ping = recruteur.mention if recruteur else " ".join(r.mention for r in staff_roles) or "@Staff"
         texte = (
             f"{ping} | {interaction.user.mention}\n\n"
             f"📋 **FORMULAIRE DE RECRUTEMENT**\n\n"
@@ -751,6 +749,7 @@ async def creer_ticket(interaction: discord.Interaction, type_ticket: str):
             f"**✅ Confirmation**\n☐ Je respecterai les règles\n☐ Toute fausse info = refus"
         )
     else:
+        ping  = " ".join(r.mention for r in staff_roles) or "@Staff"
         texte = f"{ping} | {interaction.user.mention}\n\n📩 **Autre demande**\n\nExplique ta demande, un membre te répondra.\nPour fermer : `!fermer`"
 
     await channel.send(texte)
