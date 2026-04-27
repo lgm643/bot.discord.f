@@ -2504,56 +2504,102 @@ def _fmt_val(guild: discord.Guild, key: str, val) -> str:
 
 
 def _build_config_embed(guild: discord.Guild, group: str | None = None) -> discord.Embed:
-    """Construit l'embed de config pour un groupe ou tous les groupes."""
+    """Construit l'embed de config pour un groupe ou la page d'accueil."""
     cfg = load_config(guild.id)
 
     if group:
+        # ── Page d'un groupe : affiche toutes ses clés ──────────
         embed = discord.Embed(
             title=f"⚙️ Config — {group}",
-            description="Utilisez le menu ci-dessous pour modifier une valeur.\nRépondez dans ce salon quand demandé.",
-            color=0x9B59B6,
-            timestamp=now_utc()
-        )
-        keys = CONFIG_GROUPS.get(group, [])
-        lines = []
-        for key, label in keys:
-            val = cfg.get(key, "—")
-            lines.append(f"**{label}**\n`{key}` → {_fmt_val(guild, key, val)}")
-        embed.add_field(name="\u200b", value="\n".join(lines) or "_Aucune clé_", inline=False)
-    else:
-        embed = discord.Embed(
-            title="⚙️ Configuration du serveur",
             description=(
-                "Choisissez une **catégorie** dans le menu pour modifier les valeurs.\n"
+                "Utilisez le menu ci-dessous pour modifier une valeur.\n"
+                "Répondez dans ce salon quand demandé.\n"
                 "⚠️ = introuvable sur ce serveur"
             ),
             color=0x9B59B6,
             timestamp=now_utc()
         )
-        for grp, keys in CONFIG_GROUPS.items():
-            lines = []
-            for key, label in keys:
-                val = cfg.get(key, "—")
-                lines.append(f"`{key}` → {_fmt_val(guild, key, val)}")
-            embed.add_field(name=grp, value="\n".join(lines), inline=False)
+        keys = CONFIG_GROUPS.get(group, [])
 
-    embed.set_footer(text="💡 IDs ou noms acceptés • Listes : séparez par des virgules")
+        # Découpe en champs de max 950 chars pour respecter les limites Discord
+        current_lines = []
+        current_len   = 0
+        field_idx     = 0
+
+        for key, label in keys:
+            val  = cfg.get(key, "—")
+            line = f"**{label}**\n`{key}` → {_fmt_val(guild, key, val)}"
+            if current_len + len(line) + 1 > 950 and current_lines:
+                embed.add_field(
+                    name="\u200b" if field_idx == 0 else f"\u200b ({field_idx + 1})",
+                    value="\n".join(current_lines),
+                    inline=False
+                )
+                current_lines = []
+                current_len   = 0
+                field_idx    += 1
+            current_lines.append(line)
+            current_len += len(line) + 1
+
+        if current_lines:
+            embed.add_field(
+                name="\u200b" if field_idx == 0 else f"\u200b ({field_idx + 1})",
+                value="\n".join(current_lines),
+                inline=False
+            )
+
+    else:
+        # ── Page d'accueil : liste les groupes avec le nombre de clés ──
+        lines = []
+        for grp, keys in CONFIG_GROUPS.items():
+            lines.append(f"**{grp}** — {len(keys)} clé(s)")
+
+        embed = discord.Embed(
+            title="⚙️ Configuration du serveur",
+            description=(
+                "Choisissez une **catégorie** dans le menu déroulant ci-dessous "
+                "pour voir et modifier les valeurs.\n\n"
+                + "\n".join(lines)
+                + "\n\n⚠️ = introuvable sur ce serveur"
+            ),
+            color=0x9B59B6,
+            timestamp=now_utc()
+        )
+
+    embed.set_footer(text="💡 IDs ou noms acceptés • Listes : +valeur / -valeur / tout remplacer")
     return embed
 
 
 # ── Sélecteur de catégorie ─────────────────────────────────────
 
+# Les emojis complexes (multi-codepoints) plantent discord.py dans SelectOption.
+# On extrait uniquement l'emoji simple (1 char) ou on n'en met pas.
+def _safe_emoji(grp: str) -> str | None:
+    first = grp.split()[0]
+    # Garde uniquement si c'est un emoji simple (pas de lettre ASCII)
+    if first and not first[0].isascii():
+        return first
+    return None
+
+
 class ConfigGroupSelect(discord.ui.Select):
-    def __init__(self, author_id: int):
+    def __init__(self, author_id: int, page: int = 0):
         self.author_id = author_id
-        options = [
-            discord.SelectOption(label=grp, value=grp, emoji=grp.split()[0])
-            for grp in CONFIG_GROUPS
-        ]
+        self.page      = page
+        all_groups     = list(CONFIG_GROUPS.keys())
+        # Discord limite à 25 options par select → on pagine si nécessaire
+        chunk          = all_groups[page * 25:(page + 1) * 25]
+        options = []
+        for grp in chunk:
+            emoji = _safe_emoji(grp)
+            opt   = discord.SelectOption(label=grp[:100], value=grp)
+            if emoji:
+                opt.emoji = emoji
+            options.append(opt)
         super().__init__(
             placeholder="📂 Choisir une catégorie…",
             options=options,
-            custom_id="cfg_group_select"
+            custom_id=f"cfg_group_select_{page}"
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -2567,11 +2613,49 @@ class ConfigGroupSelect(discord.ui.Select):
 
 
 class ConfigMainView(discord.ui.View):
-    def __init__(self, author_id: int):
+    def __init__(self, author_id: int, page: int = 0):
         super().__init__(timeout=300)
         self.author_id = author_id
+        self.page      = page
         self.msg: discord.Message | None = None
-        self.add_item(ConfigGroupSelect(author_id))
+
+        self.add_item(ConfigGroupSelect(author_id, page))
+
+        if page > 0:
+            btn_prev          = discord.ui.Button(label="◀️ Précédent", style=discord.ButtonStyle.grey, row=1)
+            btn_prev.callback = self._prev_page
+            self.add_item(btn_prev)
+
+        if (page + 1) * 25 < len(CONFIG_GROUPS):
+            btn_next          = discord.ui.Button(label="Suivant ▶️", style=discord.ButtonStyle.grey, row=1)
+            btn_next.callback = self._next_page
+            self.add_item(btn_next)
+
+        btn_close          = discord.ui.Button(label="❌ Fermer", style=discord.ButtonStyle.red, row=1)
+        btn_close.callback = self._fermer
+        self.add_item(btn_close)
+
+    async def _prev_page(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
+        view = ConfigMainView(self.author_id, self.page - 1)
+        view.msg = interaction.message
+        await interaction.response.edit_message(embed=_build_config_embed(interaction.guild), view=view)
+
+    async def _next_page(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
+        view = ConfigMainView(self.author_id, self.page + 1)
+        view.msg = interaction.message
+        await interaction.response.edit_message(embed=_build_config_embed(interaction.guild), view=view)
+
+    async def _fermer(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
+        self.stop()
+        try: await interaction.message.delete()
+        except Exception: pass
+        await interaction.response.send_message("👋 Configuration fermée.", ephemeral=True)
 
     async def interaction_check(self, i: discord.Interaction) -> bool:
         if i.user.id != self.author_id:
@@ -2587,15 +2671,6 @@ class ConfigMainView(discord.ui.View):
                 await self.msg.edit(view=self)
             except Exception:
                 pass
-
-    @discord.ui.button(label="❌ Fermer", style=discord.ButtonStyle.red, row=1)
-    async def fermer(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.stop()
-        try:
-            await interaction.message.delete()
-        except Exception:
-            pass
-        await interaction.response.send_message("👋 Configuration fermée.", ephemeral=True)
 
 
 # ── Sélecteur de clé dans un groupe ───────────────────────────
