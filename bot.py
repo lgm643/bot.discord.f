@@ -3192,124 +3192,369 @@ async def setup_cmd(ctx):
         await ctx.send("❌ Réservé aux administrateurs.", delete_after=5)
         return
 
-    cfg = load_config(ctx.guild.id)
-
+    # !setup redirige vers !config (le vrai panneau interactif)
     embed = discord.Embed(
-        title="⚙️ Configuration — Bot",
-        description=(
-            "La configuration de ce serveur est stockée dans un fichier JSON.\n\n"
-            "**Pour modifier un paramètre**, utilisez :\n"
-            "`!setconfig [clé] [valeur]`\n\n"
-            "**Exemples :**\n"
-            "`!setconfig salon_logs logs-modération`\n"
-            "`!setconfig role_staff Leader,Officier`\n"
-            "`!setconfig alt_min_days 30`\n\n"
-            "**Pour voir la config actuelle :**\n"
-            "`!config`"
-        ),
+        title="⚙️ Configuration du serveur",
+        description="Utilisez `!config` pour ouvrir le **panneau de configuration interactif** complet.",
         color=0x9B59B6
     )
-    embed.add_field(
-        name="📋 Clés disponibles",
-        value=(
-            "`salon_logs` · `salon_roster` · `salon_bienvenue`\n"
-            "`salon_catalogue` · `salon_commandes` · `salon_notifications`\n"
-            "`salon_role_toggle` · `salon_ventes_log` · `salon_cmds_allowed`\n"
-            "`role_staff` · `role_officier` · `role_leader` · `role_visiteur`\n"
-            "`role_recruteur` · `role_vendeur` · `role_acheteur_notif`\n"
-            "`categorie_tickets` · `categorie_commandes`\n"
-            "`alt_min_days` · `raid_window_secs` · `raid_threshold`\n"
-            "`spam_limit` · `spam_window`"
+    await ctx.send(embed=embed, delete_after=10)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  !config — PANNEAU INTERACTIF COMPLET (menus déroulants)
+# ═══════════════════════════════════════════════════════════════
+
+# Clés numériques
+_NUM_KEYS  = {"alt_min_days", "raid_window_secs", "raid_threshold", "spam_limit", "spam_window"}
+# Clés liste
+_LIST_KEYS = {"role_staff", "faction_roles", "salon_cmds_allowed", "allowed_domains"}
+
+# Structure complète, groupée
+CONFIG_GROUPS = {
+    "🔊 Salons": [
+        ("salon_logs",          "📜 Logs de modération",          False),
+        ("salon_bienvenue",     "👋 Salon de bienvenue",          False),
+        ("salon_roster",        "📋 Roster faction",              False),
+        ("salon_catalogue",     "🏪 Catalogue marché",            False),
+        ("salon_commandes",     "🛒 Commandes marché",            False),
+        ("salon_notifications", "🔔 Notifications marché",        False),
+        ("salon_role_toggle",   "🎭 Bouton rôles",                False),
+        ("salon_ventes_log",    "💸 Logs des ventes",             False),
+        ("salon_recherche",     "🔍 Recherche articles",          False),
+        ("salon_cmds_allowed",  "✅ Salons commandes (liste)",    True),
+    ],
+    "🎭 Rôles": [
+        ("role_staff",          "👑 Staff / Admin (liste)",       True),
+        ("role_officier",       "⚔️ Officier",                   False),
+        ("role_leader",         "👑 Leader",                      False),
+        ("role_visiteur",       "👤 Visiteur (auto à l'arrivée)", False),
+        ("role_recruteur",      "📋 Recruteur (tickets recrutement)", False),
+        ("role_vendeur",        "🏷️ Vendeur certifié",           False),
+        ("role_staff_market",   "🛒 Staff marché",                False),
+        ("role_acheteur_notif", "🔔 Notif acheteur",             False),
+        ("role_vendu",          "✅ Rôle vendu",                  False),
+    ],
+    "📁 Catégories": [
+        ("categorie_tickets",   "🎫 Catégorie tickets",          False),
+        ("categorie_commandes", "📦 Catégorie commandes",        False),
+    ],
+    "⚙️ Sécurité": [
+        ("alt_min_days",     "🛡️ Anti-alt : âge minimum (jours)", False),
+        ("raid_window_secs", "🚨 Anti-raid : fenêtre (secondes)", False),
+        ("raid_threshold",   "🚨 Anti-raid : seuil membres",      False),
+        ("spam_limit",       "⚡ Anti-spam : messages max",        False),
+        ("spam_window",      "⚡ Anti-spam : fenêtre (secondes)",  False),
+    ],
+}
+
+
+def _fmt_cfg_val(guild: discord.Guild, key: str, val) -> str:
+    """Formate une valeur de config lisiblement."""
+    if isinstance(val, list):
+        parts = []
+        for v in val:
+            if "salon" in key:
+                ch = resolve_channel(guild, v)
+                parts.append(f"<#{ch.id}>" if ch else f"⚠️`{v}`")
+            elif "role" in key:
+                r = resolve_role(guild, v)
+                parts.append(r.mention if r else f"⚠️`{v}`")
+            else:
+                parts.append(f"`{v}`")
+        return ", ".join(parts) if parts else "_vide_"
+    if "salon" in key:
+        ch = resolve_channel(guild, val)
+        return f"<#{ch.id}>" if ch else f"⚠️`{val}`"
+    if "role" in key:
+        r = resolve_role(guild, val)
+        return r.mention if r else f"⚠️`{val}`"
+    if "categorie" in key:
+        cat = resolve_category(guild, val)
+        return f"📁 {cat.name}" if cat else f"⚠️`{val}`"
+    return f"`{val}`"
+
+
+def _build_group_embed(guild: discord.Guild, group: str) -> discord.Embed:
+    """Construit l'embed d'un groupe de config avec toutes ses clés."""
+    cfg   = load_config(guild.id)
+    keys  = CONFIG_GROUPS[group]
+    embed = discord.Embed(
+        title=f"⚙️ Config — {group}",
+        description=(
+            "Utilisez le menu ci-dessous pour **modifier une valeur**.\n"
+            "Répondez dans ce salon quand demandé.\n"
+            "⚠️ = introuvable sur ce serveur"
         ),
-        inline=False
+        color=0x9B59B6,
+        timestamp=now_utc()
     )
-    embed.set_footer(text="Les noms sont insensibles à la casse. Les listes se séparent par des virgules.")
-    await ctx.send(embed=embed)
+    # Découpe les champs pour rester sous 1024 chars
+    lines, cur_len, field_n = [], 0, 0
+    for key, label, _ in keys:
+        val  = cfg.get(key, "—")
+        line = f"**{label}**\n`{key}` → {_fmt_cfg_val(guild, key, val)}"
+        if cur_len + len(line) + 1 > 950 and lines:
+            embed.add_field(name="\u200b", value="\n".join(lines), inline=False)
+            lines, cur_len, field_n = [], 0, field_n + 1
+        lines.append(line)
+        cur_len += len(line) + 1
+    if lines:
+        embed.add_field(name="\u200b", value="\n".join(lines), inline=False)
+    embed.set_footer(text="💡 Noms ou IDs acceptés • Listes : +valeur / -valeur / tout remplacer")
+    return embed
 
 
-@bot.command(name="setconfig")
-async def setconfig_cmd(ctx, cle: str = None, *, valeur: str = None):
-    """Modifie une valeur de configuration. Réservé aux administrateurs."""
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Réservé aux administrateurs.", delete_after=5); return
-    if cle is None or valeur is None:
-        await ctx.send("❌ `!setconfig [clé] [valeur]`", delete_after=6); return
+def _build_home_embed(guild: discord.Guild) -> discord.Embed:
+    """Embed d'accueil du !config."""
+    embed = discord.Embed(
+        title="⚙️ Configuration du serveur",
+        description=(
+            "Choisissez une **catégorie** dans le menu déroulant pour voir et modifier les valeurs.\n\n"
+            + "\n".join(f"**{g}** — {len(v)} clé(s)" for g, v in CONFIG_GROUPS.items())
+            + "\n\n⚠️ = introuvable sur ce serveur"
+        ),
+        color=0x9B59B6,
+        timestamp=now_utc()
+    )
+    embed.set_footer(text="Timeout automatique après 5 minutes")
+    return embed
 
-    cfg = load_config(ctx.guild.id)
-    cle = cle.lower().strip()
 
-    # Clés numériques
-    if cle in {"alt_min_days", "raid_window_secs", "raid_threshold", "spam_limit", "spam_window"}:
+# ── Sélecteur de groupe ─────────────────────────────────────────
+
+class _GroupSelect(discord.ui.Select):
+    def __init__(self, author_id: int):
+        self.author_id = author_id
+        options = []
+        for grp in CONFIG_GROUPS:
+            first = grp.split()[0]
+            emoji = first if first and not first[0].isascii() else None
+            opt   = discord.SelectOption(label=grp, value=grp)
+            if emoji:
+                opt.emoji = emoji
+            options.append(opt)
+        super().__init__(placeholder="📂 Choisir une catégorie…", options=options, custom_id="cfg_group_sel")
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
+        group = self.values[0]
+        embed = _build_group_embed(interaction.guild, group)
+        view  = _GroupView(self.author_id, group, interaction.message)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class _HomeView(discord.ui.View):
+    def __init__(self, author_id: int, msg: discord.Message | None = None):
+        super().__init__(timeout=300)
+        self.author_id = author_id
+        self.msg       = msg
+        self.add_item(_GroupSelect(author_id))
+
+    async def on_timeout(self):
+        if self.msg:
+            try:
+                for item in self.children:
+                    item.disabled = True
+                await self.msg.edit(view=self)
+            except Exception:
+                pass
+
+    @discord.ui.button(label="❌ Fermer", style=discord.ButtonStyle.red, row=1)
+    async def fermer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
+        self.stop()
+        try: await interaction.message.delete()
+        except Exception: pass
+        await interaction.response.send_message("👋 Configuration fermée.", ephemeral=True)
+
+
+# ── Sélecteur de clé dans un groupe ────────────────────────────
+
+class _KeySelect(discord.ui.Select):
+    def __init__(self, author_id: int, group: str, orig_msg: discord.Message):
+        self.author_id = author_id
+        self.group     = group
+        self.orig_msg  = orig_msg
+        options = [
+            discord.SelectOption(label=label[:50], value=key, description=f"clé : {key}")
+            for key, label, _ in CONFIG_GROUPS[group]
+        ]
+        super().__init__(placeholder="🔑 Choisir la clé à modifier…", options=options[:25], custom_id="cfg_key_sel")
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
+
+        key      = self.values[0]
+        label    = next((lbl for k, lbl, _ in CONFIG_GROUPS[self.group] if k == key), key)
+        is_list  = key in _LIST_KEYS
+        is_num   = key in _NUM_KEYS
+        is_salon = "salon" in key or "categorie" in key
+        is_role  = "role" in key
+
+        if is_list and is_salon:
+            action = (
+                "➕ Ajouter un salon : `+nom-du-salon`\n"
+                "➖ Retirer un salon : `-nom-du-salon`\n"
+                "🔄 Remplacer tout : `salon1, salon2`"
+            )
+        elif is_list and is_role:
+            action = (
+                "➕ Ajouter un rôle : `+NomDuRole`\n"
+                "➖ Retirer un rôle : `-NomDuRole`\n"
+                "🔄 Remplacer tout : `Role1, Role2`"
+            )
+        elif is_list:
+            action = "➕ `+valeur` · ➖ `-valeur` · 🔄 `val1, val2`"
+        elif is_num:
+            action = "Tapez un **nombre entier** (ex: `30`)"
+        elif is_salon:
+            action = "Tapez le **nom exact** du salon ou mentionnez-le avec `#`\nEx : `logs-modération` ou `#logs`"
+        elif is_role:
+            action = "Tapez le **nom exact** du rôle ou mentionnez-le avec `@`\nEx : `Leader` ou `@Leader`"
+        else:
+            action = "Tapez la nouvelle valeur"
+
+        cfg = load_config(interaction.guild.id)
+        cur = _fmt_cfg_val(interaction.guild, key, cfg.get(key, "—"))
+
+        embed = discord.Embed(
+            title=f"✏️ Modifier : {label}",
+            description=(
+                f"**Clé :** `{key}`\n"
+                f"**Valeur actuelle :** {cur}\n\n"
+                f"{action}\n\n"
+                f"💬 Répondez dans ce salon **(60 secondes)**.\n"
+                f"Tapez `annuler` pour abandonner."
+            ),
+            color=0x3498DB,
+            timestamp=now_utc()
+        )
+        embed.set_footer(text="⏱️ 60 secondes pour répondre")
+        await interaction.response.edit_message(embed=embed, view=None)
+
+        guild = interaction.guild
+        def chk(m: discord.Message) -> bool:
+            return m.author.id == self.author_id and m.channel.id == interaction.channel.id
+
         try:
-            cfg[cle] = float(valeur) if "." in valeur else int(valeur)
-        except ValueError:
-            await ctx.send(f"❌ `{cle}` doit être un nombre.", delete_after=5); return
-    # Clés liste
-    elif cle in {"role_staff", "faction_roles", "salon_cmds_allowed", "allowed_domains"}:
-        cfg[cle] = [v.strip() for v in valeur.split(",") if v.strip()]
-    # Clés texte simple
-    else:
-        cfg[cle] = valeur.strip()
+            msg = await bot.wait_for("message", check=chk, timeout=60)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("⏰ Temps écoulé.", ephemeral=True)
+            embed = _build_group_embed(guild, self.group)
+            view  = _GroupView(self.author_id, self.group, self.orig_msg)
+            await self.orig_msg.edit(embed=embed, view=view)
+            return
 
-    save_config(ctx.guild.id, cfg)
-    await ctx.send(f"✅ `{cle}` mis à jour → `{cfg[cle]}`", delete_after=8)
+        try: await msg.delete()
+        except Exception: pass
+
+        valeur = msg.content.strip()
+        if valeur.lower() == "annuler":
+            await interaction.followup.send("❌ Modification annulée.", ephemeral=True)
+            embed = _build_group_embed(guild, self.group)
+            view  = _GroupView(self.author_id, self.group, self.orig_msg)
+            await self.orig_msg.edit(embed=embed, view=view)
+            return
+
+        cfg = load_config(guild.id)
+
+        if is_num:
+            try:
+                cfg[key] = float(valeur) if "." in valeur else int(valeur)
+            except ValueError:
+                await interaction.followup.send(f"❌ `{key}` attend un nombre.", ephemeral=True)
+                embed = _build_group_embed(guild, self.group)
+                view  = _GroupView(self.author_id, self.group, self.orig_msg)
+                await self.orig_msg.edit(embed=embed, view=view)
+                return
+
+        elif is_list:
+            current = cfg.get(key, [])
+            if isinstance(current, str):
+                current = [current]
+            if valeur.startswith("+"):
+                to_add = valeur[1:].strip()
+                if to_add and to_add not in current:
+                    current.append(to_add)
+                cfg[key] = current
+            elif valeur.startswith("-"):
+                to_rm    = valeur[1:].strip().lower()
+                cfg[key] = [x for x in current if str(x).lower() != to_rm]
+            else:
+                cfg[key] = [v.strip() for v in valeur.split(",") if v.strip()]
+        else:
+            # Nettoie les mentions Discord (<#ID> ou <@&ID>)
+            clean = re.sub(r"[<#@&>]", "", valeur).strip()
+            cfg[key] = clean
+
+        save_config(guild.id, cfg)
+
+        val_saved   = cfg[key]
+        val_display = (", ".join(f"`{v}`" for v in val_saved)
+                       if isinstance(val_saved, list) else f"`{val_saved}`")
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="✅ Mis à jour !",
+                description=f"**{label}**\n`{key}` → {val_display}",
+                color=0x2ECC71,
+                timestamp=now_utc()
+            ),
+            ephemeral=True
+        )
+        embed = _build_group_embed(guild, self.group)
+        view  = _GroupView(self.author_id, self.group, self.orig_msg)
+        await self.orig_msg.edit(embed=embed, view=view)
+
+
+class _GroupView(discord.ui.View):
+    def __init__(self, author_id: int, group: str, orig_msg: discord.Message):
+        super().__init__(timeout=300)
+        self.author_id = author_id
+        self.group     = group
+        self.orig_msg  = orig_msg
+        self.add_item(_KeySelect(author_id, group, orig_msg))
+
+    async def on_timeout(self):
+        try:
+            for item in self.children:
+                item.disabled = True
+            await self.orig_msg.edit(view=self)
+        except Exception:
+            pass
+
+    @discord.ui.button(label="⬅️ Retour", style=discord.ButtonStyle.grey, row=1)
+    async def retour(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
+        embed = _build_home_embed(interaction.guild)
+        view  = _HomeView(self.author_id, interaction.message)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    @discord.ui.button(label="❌ Fermer", style=discord.ButtonStyle.red, row=1)
+    async def fermer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
+        self.stop()
+        try: await interaction.message.delete()
+        except Exception: pass
+        await interaction.response.send_message("👋 Configuration fermée.", ephemeral=True)
 
 
 @bot.command(name="config")
 async def config_cmd(ctx):
-    """Affiche la configuration actuelle du serveur. Réservé aux administrateurs."""
+    """Panneau de configuration interactif. Réservé aux administrateurs."""
     if not ctx.author.guild_permissions.administrator:
         await ctx.send("❌ Réservé aux administrateurs.", delete_after=5); return
-
-    cfg = load_config(ctx.guild.id)
-
-    def resolve_display(key: str, val) -> str:
-        if isinstance(val, list):
-            items = []
-            for v in val:
-                if key.startswith("salon") or "salon" in key:
-                    ch = resolve_channel(ctx.guild, v)
-                    items.append(f"#{ch.name}" if ch else f"⚠️ `{v}` (introuvable)")
-                elif key.startswith("role") or "role" in key:
-                    r = resolve_role(ctx.guild, v)
-                    items.append(f"@{r.name}" if r else f"⚠️ `{v}` (introuvable)")
-                else:
-                    items.append(str(v))
-            return ", ".join(items) if items else "_vide_"
-        elif key.startswith("salon") or "salon" in key:
-            ch = resolve_channel(ctx.guild, val)
-            return f"#{ch.name}" if ch else f"⚠️ `{val}` (introuvable)"
-        elif key.startswith("role") or "role" in key:
-            r = resolve_role(ctx.guild, val)
-            return f"@{r.name}" if r else f"⚠️ `{val}` (introuvable)"
-        elif key.startswith("categorie"):
-            cat = resolve_category(ctx.guild, val)
-            return f"📁 {cat.name}" if cat else f"⚠️ `{val}` (introuvable)"
-        return str(val)
-
-    # Groupes de clés à afficher
-    groups = {
-        "🔊 Salons": ["salon_logs", "salon_roster", "salon_bienvenue", "salon_catalogue",
-                       "salon_commandes", "salon_notifications", "salon_role_toggle",
-                       "salon_ventes_log", "salon_cmds_allowed", "salon_recherche"],
-        "🎭 Rôles":  ["role_staff", "role_officier", "role_leader", "role_visiteur",
-                       "role_recruteur", "role_vendeur",
-                       "role_staff_market", "role_acheteur_notif", "role_vendu"],
-        "📁 Catégories": ["categorie_tickets", "categorie_commandes"],
-        "⚙️ Paramètres": ["alt_min_days", "raid_window_secs", "raid_threshold", "spam_limit", "spam_window"],
-    }
-
-    embed = discord.Embed(title="⚙️ Configuration du serveur", color=0x9B59B6, timestamp=now_utc())
-    for group_name, keys in groups.items():
-        lines = []
-        for k in keys:
-            if k in cfg and k not in {"roster_roles", "faction_roles"}:
-                lines.append(f"`{k}` → {resolve_display(k, cfg[k])}")
-        if lines:
-            embed.add_field(name=group_name, value="\n".join(lines), inline=False)
-
-    embed.set_footer(text="!setconfig [clé] [valeur] pour modifier • ⚠️ = non résolu sur ce serveur")
-    await ctx.send(embed=embed)
+    try: await ctx.message.delete()
+    except Exception: pass
+    embed = _build_home_embed(ctx.guild)
+    view  = _HomeView(ctx.author.id)
+    msg   = await ctx.send(embed=embed, view=view)
+    view.msg = msg
 
 
 # ═══════════════════════════════════════════════════════════════
