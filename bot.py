@@ -324,23 +324,38 @@ EXEMPT_COMMANDS = {
 @bot.check
 async def check_command_channel(ctx: commands.Context) -> bool:
     cmd = ctx.command.name if ctx.command else ""
+
+    # ── Commandes toujours exemptées du filtre salon ──
     if cmd in EXEMPT_COMMANDS:
         return True
-    if is_staff(ctx.author):
-        return True
-    if cmd in {"catalogue", "cataloguesupp"}:
-        if not is_staff_market(ctx.author):
+
+    # ── Staff → accès libre (sauf restrictions marché ci-dessous) ──
+    staff = is_staff(ctx.author)
+
+    # ── FIX 4 : !catalogue et !gestion → UNIQUEMENT dans gestion-stock ou commandes ──
+    if cmd in {"catalogue", "cataloguesupp", "gestion"}:
+        if not is_vendeur(ctx.author):
             await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5)
             return False
-        allowed = cfg_channels(ctx.guild, "salon_cmds_allowed")
-        commandes_ch = cfg_channel(ctx.guild, "salon_commandes")
-        if commandes_ch:
-            allowed.append(commandes_ch)
-        allowed_ids = {c.id for c in allowed}
+        # Salons autorisés : gestion-stock (salon_gestion) + commandes (salon_commandes)
+        allowed_ids: set[int] = set()
+        gestion_ch  = cfg_channel(ctx.guild, "salon_gestion")
+        commande_ch = cfg_channel(ctx.guild, "salon_commandes")
+        if gestion_ch:  allowed_ids.add(gestion_ch.id)
+        if commande_ch: allowed_ids.add(commande_ch.id)
+        # Fallback : si aucun des deux n'est configuré, le staff peut l'utiliser partout
+        if not allowed_ids:
+            return staff or True
         if ctx.channel.id not in allowed_ids:
-            ch_mentions = " ou ".join(f"<#{c.id}>" for c in allowed) or "les salons prévus"
-            await ctx.send(f"❌ Utilise cette commande dans {ch_mentions}.", delete_after=8)
+            mentions = " ou ".join(
+                f"<#{c.id}>" for c in [gestion_ch, commande_ch] if c
+            ) or "le salon gestion-stock ou commandes"
+            await ctx.send(f"❌ Cette commande est réservée à {mentions}.", delete_after=8)
             return False
+        return True
+
+    # ── Autres commandes → salons_cmds_allowed standard ──
+    if staff:
         return True
     allowed = cfg_channels(ctx.guild, "salon_cmds_allowed")
     allowed_ids = {c.id for c in allowed}
@@ -472,8 +487,15 @@ def load_games_for(guild_id: int) -> dict:
 #  CATALOGUE
 # ═══════════════════════════════════════════════════════════════
 
-_catalogue_msg_ids: dict[int, int] = {}
-_pending_orders:    dict[str, bool] = {}
+_catalogue_msg_ids:  dict[int, int] = {}   # guild_id → catalogue msg_id
+_commande_msg_ids:   dict[int, int] = {}   # guild_id → commande embed msg_id
+_pending_orders:     dict[str, bool] = {}
+_catalogue_lock:     dict[int, asyncio.Lock] = {}  # guild_id → lock anti-double refresh
+
+# ─── clé unique par article + vendeur ────────────────────────────────────────
+# Format: "{nom_lower}:{vendeur_id}"  → permet plusieurs vendeurs pour un même nom
+def _item_key(nom: str, vendeur_id: int) -> str:
+    return f"{nom.lower().strip()}:{vendeur_id}"
 
 
 def catalogue_path(guild_id: int) -> Path:
@@ -488,7 +510,7 @@ def load_catalogue(guild_id: int) -> dict:
                 return json.load(f)
         except Exception as e:
             print(f"[CATALOGUE] Erreur lecture : {e}")
-    return {"items": {}, "msg_id": None}
+    return {"items": {}, "msg_id": None, "commande_msg_id": None}
 
 
 def save_catalogue(guild_id: int, data: dict):
@@ -502,7 +524,13 @@ def save_catalogue(guild_id: int, data: dict):
         print(f"[CATALOGUE] Erreur sauvegarde : {e}")
 
 
+def _clean_ghost_items(items: dict) -> dict:
+    """Supprime les articles avec quantité ≤ 0 (articles fantômes)."""
+    return {k: v for k, v in items.items() if v.get("quantite", 0) > 0}
+
+
 def build_catalogue_embed(items: dict) -> discord.Embed:
+    """Embed catalogue groupé par vendeur — clés au format nom:vendeur_id."""
     embed = discord.Embed(
         title="🏪 Catalogue",
         description="Articles disponibles à la vente :",
@@ -512,34 +540,73 @@ def build_catalogue_embed(items: dict) -> discord.Embed:
     if not items:
         embed.add_field(name="📭 Aucun article", value="Le catalogue est vide.", inline=False)
     else:
-        for nom, item in items.items():
-            embed.add_field(
-                name=f"🔹 {item['nom']}",
-                value=f"💰 **Prix :** {item['prix']}\n📦 **Stock :** {item['quantite']}\n👤 **Vendeur :** <@{item['vendeur_id']}>",
-                inline=True
+        # Grouper par vendeur
+        par_vendeur: dict[int, list] = defaultdict(list)
+        for key, item in items.items():
+            par_vendeur[item["vendeur_id"]].append(item)
+        for vendeur_id, arts in par_vendeur.items():
+            vendeur_nom = f"<@{vendeur_id}>"
+            lignes = "\n".join(
+                f"🔹 **{a['nom']}** — 📦 {a['quantite']} · 💰 {a['prix']}"
+                for a in arts
             )
+            embed.add_field(name=f"👤 {vendeur_nom}", value=lignes, inline=False)
     embed.set_footer(text="Utilisez !commande pour passer une commande")
     return embed
 
 
+def _get_catalogue_lock(guild_id: int) -> asyncio.Lock:
+    if guild_id not in _catalogue_lock:
+        _catalogue_lock[guild_id] = asyncio.Lock()
+    return _catalogue_lock[guild_id]
+
+
 async def update_catalogue_message(guild: discord.Guild, items: dict):
-    data    = load_catalogue(guild.id)
-    channel = cfg_channel(guild, "salon_catalogue")
-    if not channel:
-        return
-    embed  = build_catalogue_embed(items)
-    msg_id = data.get("msg_id") or _catalogue_msg_ids.get(guild.id)
-    if msg_id:
-        try:
-            msg = await channel.fetch_message(msg_id)
-            await msg.edit(embed=embed)
-            return
-        except Exception:
-            pass
-    msg = await channel.send(embed=embed)
-    _catalogue_msg_ids[guild.id] = msg.id
-    data["msg_id"] = msg.id
-    save_catalogue(guild.id, data)
+    """
+    Met à jour l'embed catalogue ET l'embed commandes simultanément.
+    Utilise un lock par guild pour éviter les conflits de refresh.
+    """
+    async with _get_catalogue_lock(guild.id):
+        items = _clean_ghost_items(items)
+        data  = load_catalogue(guild.id)
+
+        # ── Catalogue embed ──
+        cat_ch = cfg_channel(guild, "salon_catalogue")
+        if cat_ch:
+            embed  = build_catalogue_embed(items)
+            msg_id = data.get("msg_id") or _catalogue_msg_ids.get(guild.id)
+            if msg_id:
+                try:
+                    msg = await cat_ch.fetch_message(msg_id)
+                    await msg.edit(embed=embed)
+                except Exception:
+                    msg = await cat_ch.send(embed=embed)
+                    _catalogue_msg_ids[guild.id] = msg.id
+                    data["msg_id"] = msg.id
+            else:
+                msg = await cat_ch.send(embed=embed)
+                _catalogue_msg_ids[guild.id] = msg.id
+                data["msg_id"] = msg.id
+
+        # ── Commandes embed (synchronisation immédiate) ──
+        cmd_ch = cfg_channel(guild, "salon_commandes")
+        if cmd_ch:
+            cmd_embed = _build_commande_embed_from_items(guild, items)
+            cmd_view  = CommandeView(guild.id, items)
+            cmd_msg_id = data.get("commande_msg_id") or _commande_msg_ids.get(guild.id)
+            if cmd_msg_id:
+                try:
+                    cmd_msg = await cmd_ch.fetch_message(cmd_msg_id)
+                    await cmd_msg.edit(embed=cmd_embed, view=cmd_view)
+                except Exception:
+                    cmd_msg = await cmd_ch.send(embed=cmd_embed, view=cmd_view)
+                    _commande_msg_ids[guild.id] = cmd_msg.id
+                    data["commande_msg_id"] = cmd_msg.id
+            # Ne recrée pas si aucun embed commandes n'existe encore
+
+        # Sauvegarde les items nettoyés
+        data["items"] = items
+        save_catalogue(guild.id, data)
 
 
 async def send_notif(guild: discord.Guild, texte: str):
@@ -834,20 +901,40 @@ def fuzzy_search(terme: str, items: dict, seuil: float = 0.5) -> dict:
 #  SUPPRESSION AUTO DANS SALON COMMANDES
 # ═══════════════════════════════════════════════════════════════
 
-async def _auto_delete_in_commandes(message: discord.Message):
+async def _auto_delete_in_marche(message: discord.Message):
     """
-    Dans le salon commandes : supprime les messages non-staff non-bot après 3 s.
-    Ne supprime jamais les messages du bot ni du staff.
+    FIX 2 : Dans les salons catalogue ET commandes, supprime TOUS les messages
+    après 1 seconde — y compris ceux du bot — sauf :
+      - l'embed principal du catalogue  (msg_id stocké dans data["msg_id"])
+      - l'embed principal des commandes (msg_id stocké dans data["commande_msg_id"])
     """
-    if message.author.bot:
+    if not message.guild:
         return
-    cfg = load_config(message.guild.id)
-    commandes_ch = resolve_channel(message.guild, cfg.get("salon_commandes"))
-    if not commandes_ch or message.channel.id != commandes_ch.id:
+
+    cfg          = load_config(message.guild.id)
+    cat_ch       = resolve_channel(message.guild, cfg.get("salon_catalogue"))
+    cmd_ch       = resolve_channel(message.guild, cfg.get("salon_commandes"))
+
+    in_cat = cat_ch and message.channel.id == cat_ch.id
+    in_cmd = cmd_ch and message.channel.id == cmd_ch.id
+
+    if not (in_cat or in_cmd):
         return
-    if is_staff(message.author):
-        return
-    await asyncio.sleep(3)
+
+    # Identifie les embeds protégés
+    data        = load_catalogue(message.guild.id)
+    protected   = {
+        data.get("msg_id"),
+        data.get("commande_msg_id"),
+        _catalogue_msg_ids.get(message.guild.id),
+        _commande_msg_ids.get(message.guild.id),
+    }
+    protected.discard(None)
+
+    if message.id in protected:
+        return  # Ne jamais supprimer les embeds principaux
+
+    await asyncio.sleep(1)
     try:
         await message.delete()
     except Exception:
@@ -943,29 +1030,38 @@ async def gestion_cmd(ctx):
         return
     prix = resp_prix.content.strip()
 
-    # ── Vérification existence
+    # ── Vérification existence (FIX 5+7 : par clé vendeur-spécifique)
     data    = load_catalogue(ctx.guild.id)
     items   = data.get("items", {})
-    nom_key = nom.lower()
-    existant = items.get(nom_key)
+    my_key  = _item_key(nom, ctx.author.id)  # clé unique pour CE vendeur
+    nom_low = nom.lower().strip()
 
-    if existant:
-        vendeur_existant = ctx.guild.get_member(existant["vendeur_id"])
-        vendeur_nom      = vendeur_existant.display_name if vendeur_existant else f"<@{existant['vendeur_id']}>"
+    # Cherche un article du même nom par un AUTRE vendeur (pour l'info)
+    existant_autre = next(
+        (v for k, v in items.items()
+         if k.split(":")[0] == nom_low and v.get("vendeur_id") != ctx.author.id),
+        None
+    )
+    # Cherche mon propre article
+    existant = items.get(my_key)
+
+    if existant_autre and not existant:
+        # Un autre vendeur a cet article → affiche une info mais ne bloque pas
+        vendeur_existant = ctx.guild.get_member(existant_autre["vendeur_id"])
+        vendeur_nom      = vendeur_existant.display_name if vendeur_existant else f"<@{existant_autre['vendeur_id']}>"
         date_ajout       = ""
-        if existant.get("created"):
-            dt = datetime.fromtimestamp(existant["created"], tz=timezone.utc)
+        if existant_autre.get("created"):
+            dt = datetime.fromtimestamp(existant_autre["created"], tz=timezone.utc)
             date_ajout = f"\n📅 **Ajouté le :** {discord.utils.format_dt(dt, style='D')}"
 
         warn_embed = discord.Embed(
-            title="⚠️ Article déjà en vente",
+            title="⚠️ Article déjà en vente par un autre vendeur",
             description=(
-                f"**{existant['nom']}** est déjà dans le catalogue.\n\n"
-                f"👤 **Vendeur actuel :** {vendeur_nom}\n"
-                f"💰 **Prix actuel :** {existant['prix']}\n"
-                f"📦 **Stock actuel :** {existant['quantite']}{date_ajout}\n\n"
-                f"**Nouveau prix :** {prix} | **Nouvelle quantité ajoutée :** +{qty}\n\n"
-                f"Voulez-vous continuer ?"
+                f"**{existant_autre['nom']}** est vendu par **{vendeur_nom}**.\n\n"
+                f"💰 **Prix actuel :** {existant_autre['prix']}\n"
+                f"📦 **Stock actuel :** {existant_autre['quantite']}{date_ajout}\n\n"
+                f"Tu peux quand même ajouter ta propre entrée.\n"
+                f"Veux-tu continuer ?"
             ),
             color=0xE67E22,
             timestamp=now_utc()
@@ -984,19 +1080,26 @@ async def gestion_cmd(ctx):
             ), delete_after=6)
             return
 
-        # Mise à jour
-        items[nom_key]["quantite"] += qty
-        items[nom_key]["prix"]      = prix
-        action = f"✏️ **{nom}** mis à jour par {ctx.author.mention} — stock : {items[nom_key]['quantite']} | prix : {prix}"
+    if existant:
+        # FIX 7 : même vendeur + même nom → additionner qty, garder prix le plus bas
+        ancien_prix_num  = _parse_prix_num(existant["prix"])
+        nouveau_prix_num = _parse_prix_num(prix)
+        items[my_key]["quantite"] += qty
+        if ancien_prix_num is not None and nouveau_prix_num is not None:
+            if nouveau_prix_num < ancien_prix_num:
+                items[my_key]["prix"] = prix
+        else:
+            items[my_key]["prix"] = prix
+        action = f"✏️ **{nom}** mis à jour par {ctx.author.mention} — stock : {items[my_key]['quantite']} · prix : {items[my_key]['prix']}"
     else:
-        items[nom_key] = {
+        items[my_key] = {
             "nom":       nom,
             "quantite":  qty,
             "prix":      prix,
             "vendeur_id": ctx.author.id,
             "created":   time.time()
         }
-        action = f"➕ **{nom}** ajouté par {ctx.author.mention} — stock : {qty} | prix : {prix}"
+        action = f"➕ **{nom}** ajouté par {ctx.author.mention} — stock : {qty} · prix : {prix}"
 
     data["items"] = items
     save_catalogue(ctx.guild.id, data)
@@ -1367,14 +1470,21 @@ async def say_cmd(ctx, channel: discord.TextChannel = None, *, message: str = No
 
 @bot.event
 async def on_message(message: discord.Message):
-    if message.author.bot or not message.guild:
-        await bot.process_commands(message)
+    # FIX 2 : les messages du bot dans catalogue/commandes sont aussi supprimés
+    # (sauf les embeds protégés — géré dans _auto_delete_in_marche)
+    if not message.guild:
+        if not message.author.bot:
+            await bot.process_commands(message)
         return
+
+    # Toujours planifier la suppression automatique (valide pour bot ET humain)
+    asyncio.create_task(_auto_delete_in_marche(message))
+
+    if message.author.bot:
+        return  # Pas de traitement anti-spam/anti-lien pour les bots
+
     member = message.author
     cfg    = load_config(message.guild.id)
-
-    # ── Suppression auto dans salon commandes (non-staff)
-    asyncio.create_task(_auto_delete_in_commandes(message))
 
     # ── Anti-lien
     url_pattern = re.compile(r"(https?://|www\.)\S+", re.IGNORECASE)
@@ -2336,6 +2446,36 @@ async def classement_cmd(ctx):
 #  CATALOGUE / COMMANDES
 # ═══════════════════════════════════════════════════════════════
 
+class _PrixAlertView(discord.ui.View):
+    """FIX 6 : Confirmation quand un item existe déjà moins cher chez un autre vendeur."""
+    def __init__(self, author_id: int):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.result    = None
+
+    async def interaction_check(self, i):
+        return i.user.id == self.author_id
+
+    @discord.ui.button(label="✅ Oui, publier quand même", style=discord.ButtonStyle.green)
+    async def oui(self, i, b):
+        self.result = True; self.stop(); await i.response.defer()
+
+    @discord.ui.button(label="❌ Non, annuler", style=discord.ButtonStyle.red)
+    async def non(self, i, b):
+        self.result = False; self.stop(); await i.response.defer()
+
+
+def _parse_prix_num(prix: str) -> float | None:
+    """Extrait la première valeur numérique d'un prix textuel."""
+    nums = re.findall(r"[\d]+(?:[.,][\d]+)?", prix)
+    if nums:
+        try:
+            return float(nums[0].replace(",", "."))
+        except ValueError:
+            pass
+    return None
+
+
 @bot.command(name="catalogue")
 async def catalogue_cmd(ctx, nom: str = None, quantite: str = None, *, prix: str = None):
     if not is_vendeur(ctx.author):
@@ -2348,23 +2488,71 @@ async def catalogue_cmd(ctx, nom: str = None, quantite: str = None, *, prix: str
     except ValueError:
         await ctx.send("❌ La quantité doit être un nombre entier positif.", delete_after=6); return
 
-    data     = load_catalogue(ctx.guild.id)
-    items    = data.get("items", {})
-    nom_key  = nom.lower()
+    data    = load_catalogue(ctx.guild.id)
+    items   = data.get("items", {})
+    nom_low = nom.lower().strip()
+    my_key  = _item_key(nom, ctx.author.id)   # clé unique = nom:vendeur_id
 
-    if nom_key in items:
-        items[nom_key]["quantite"] += qty
-        items[nom_key]["prix"]      = prix
-        action = f"✏️ **{nom}** mis à jour — stock : {items[nom_key]['quantite']} | prix : {prix}"
+    # ── FIX 5 : chercher les entrées du MÊME nom par d'AUTRES vendeurs ──
+    autres = {
+        k: v for k, v in items.items()
+        if k.split(":")[0] == nom_low and v.get("vendeur_id") != ctx.author.id
+    }
+
+    # ── FIX 6 : alerte si un autre vendeur est moins cher ──
+    prix_num = _parse_prix_num(prix)
+    if autres and prix_num is not None:
+        prix_min_item = min(autres.values(), key=lambda v: (_parse_prix_num(v["prix"]) or float("inf")))
+        prix_min_num  = _parse_prix_num(prix_min_item["prix"])
+        if prix_min_num is not None and prix_num > prix_min_num:
+            vendeur_moins_cher = ctx.guild.get_member(prix_min_item["vendeur_id"])
+            vnom = vendeur_moins_cher.display_name if vendeur_moins_cher else f"<@{prix_min_item['vendeur_id']}>"
+            warn_embed = discord.Embed(
+                title="⚠️ Prix plus élevé détecté",
+                description=(
+                    f"**{nom}** est déjà vendu à **{prix_min_item['prix']}** par **{vnom}**.\n\n"
+                    f"Tu veux le vendre à **{prix}** — c'est plus cher.\n\n"
+                    f"Veux-tu quand même publier cet article ?"
+                ),
+                color=0xE67E22,
+                timestamp=now_utc()
+            )
+            view     = _PrixAlertView(ctx.author.id)
+            warn_msg = await ctx.send(embed=warn_embed, view=view)
+            await view.wait()
+            try: await warn_msg.delete()
+            except Exception: pass
+            if not view.result:
+                await ctx.send("❌ Publication annulée.", delete_after=5)
+                return
+
+    # ── FIX 7 : si c'est LE MÊME vendeur avec le MÊME nom → fusionner au prix le plus bas ──
+    if my_key in items:
+        ancien_prix_num = _parse_prix_num(items[my_key]["prix"])
+        nouveau_prix_num = prix_num
+        # Additionne les quantités
+        items[my_key]["quantite"] += qty
+        # Garde le prix le plus bas
+        if ancien_prix_num is not None and nouveau_prix_num is not None:
+            if nouveau_prix_num < ancien_prix_num:
+                items[my_key]["prix"] = prix  # nouveau prix est meilleur
+            # Sinon on garde l'ancien prix (plus bas)
+        else:
+            items[my_key]["prix"] = prix  # Impossible de comparer → prend le nouveau
+        action = (
+            f"✏️ **{nom}** mis à jour par {ctx.author.mention} — "
+            f"stock : {items[my_key]['quantite']} · prix : {items[my_key]['prix']}"
+        )
     else:
-        items[nom_key] = {
+        # Nouvel article pour ce vendeur
+        items[my_key] = {
             "nom":       nom,
             "quantite":  qty,
             "prix":      prix,
             "vendeur_id": ctx.author.id,
             "created":   time.time()
         }
-        action = f"➕ **{nom}** ajouté — stock : {qty} | prix : {prix} | vendeur : {ctx.author.mention}"
+        action = f"➕ **{nom}** ajouté par {ctx.author.mention} — stock : {qty} · prix : {prix}"
 
     data["items"] = items
     save_catalogue(ctx.guild.id, data)
@@ -2386,12 +2574,21 @@ async def cataloguesupp_cmd(ctx, nom: str = None):
 
     data    = load_catalogue(ctx.guild.id)
     items   = data.get("items", {})
-    nom_key = nom.lower()
+    my_key  = _item_key(nom, ctx.author.id)
 
-    if nom_key not in items:
-        await ctx.send(f"❌ Article **{nom}** introuvable.", delete_after=6); return
+    if my_key not in items:
+        # Fallback : chercher par nom uniquement (staff peut supprimer n'importe quelle entrée)
+        if is_staff(ctx.author):
+            candidates = [k for k in items if k.split(":")[0] == nom.lower().strip()]
+            if not candidates:
+                await ctx.send(f"❌ Article **{nom}** introuvable.", delete_after=6); return
+            for k in candidates:
+                del items[k]
+        else:
+            await ctx.send(f"❌ Article **{nom}** introuvable dans ton stock.", delete_after=6); return
+    else:
+        del items[my_key]
 
-    del items[nom_key]
     data["items"] = items
     save_catalogue(ctx.guild.id, data)
     await update_catalogue_message(ctx.guild, items)
@@ -2482,14 +2679,17 @@ async def recherche_cmd(ctx, *, terme: str = None):
 class CommandeSelect(discord.ui.Select):
     def __init__(self, guild_id: int, items: dict):
         self.guild_id = guild_id
-        options = [
-            discord.SelectOption(
-                label=item["nom"][:25],
+        options = []
+        for key, item in items.items():
+            if item.get("quantite", 0) <= 0:
+                continue  # FIX 9 : pas d'articles fantômes dans le select
+            options.append(discord.SelectOption(
+                label=f"{item['nom'][:20]} ({item['prix'][:15]})"[:25],
                 value=key,
-                description=f"Stock: {item['quantite']} | {item['prix'][:40]}"[:100]
-            )
-            for key, item in items.items()
-        ]
+                description=f"Stock: {item['quantite']} · Vendeur: <@{item['vendeur_id']}>"[:100]
+            ))
+        if not options:
+            options = [discord.SelectOption(label="Aucun article disponible", value="__vide__")]
         super().__init__(
             placeholder="🔹 Choisis un article…",
             min_values=1, max_values=1,
@@ -2498,6 +2698,11 @@ class CommandeSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        nom_key = self.values[0]
+        if nom_key == "__vide__":
+            await interaction.response.send_message("📭 Aucun article disponible.", ephemeral=True)
+            return
+
         gid = interaction.guild.id
         uid = interaction.user.id
         pk  = f"{gid}:{uid}"
@@ -2506,13 +2711,12 @@ class CommandeSelect(discord.ui.Select):
             await interaction.response.send_message("⏳ Tu as déjà une commande en cours.", ephemeral=True)
             return
 
-        data    = load_catalogue(gid)
-        items   = data.get("items", {})
-        nom_key = self.values[0]
-        item    = items.get(nom_key)
+        data  = load_catalogue(gid)
+        items = data.get("items", {})
+        item  = items.get(nom_key)
 
-        if not item or item["quantite"] <= 0:
-            await interaction.response.send_message("❌ Article indisponible.", ephemeral=True)
+        if not item or item.get("quantite", 0) <= 0:
+            await interaction.response.send_message("❌ Article indisponible ou épuisé.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -2520,7 +2724,11 @@ class CommandeSelect(discord.ui.Select):
         try:
             embed_ask = discord.Embed(
                 title=f"🛒 Commande — {item['nom']}",
-                description=f"📦 **Stock :** {item['quantite']}\n💰 **Prix :** {item['prix']}\n\nÉcris la **quantité** souhaitée.\n*(60 secondes)*",
+                description=(
+                    f"📦 **Stock :** {item['quantite']}\n"
+                    f"💰 **Prix :** {item['prix']}\n\n"
+                    f"Écris la **quantité** souhaitée dans ce salon.\n*(60 secondes)*"
+                ),
                 color=0x3498DB
             )
             await interaction.followup.send(embed=embed_ask, ephemeral=True)
@@ -2544,6 +2752,7 @@ class CommandeSelect(discord.ui.Select):
                 await interaction.followup.send("❌ Quantité invalide.", ephemeral=True)
                 return
 
+            # Re-lire le catalogue (peut avoir changé)
             data  = load_catalogue(gid)
             items = data.get("items", {})
             item  = items.get(nom_key)
@@ -2551,7 +2760,9 @@ class CommandeSelect(discord.ui.Select):
                 await interaction.followup.send("❌ Article retiré entre-temps.", ephemeral=True)
                 return
             if qty > item["quantite"]:
-                await interaction.followup.send(f"❌ Stock insuffisant. Disponible : **{item['quantite']}**", ephemeral=True)
+                await interaction.followup.send(
+                    f"❌ Stock insuffisant. Disponible : **{item['quantite']}**", ephemeral=True
+                )
                 return
 
             guild    = interaction.guild
@@ -2564,10 +2775,12 @@ class CommandeSelect(discord.ui.Select):
                 guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
             }
             if vendeur:
-                overwrites[vendeur] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+                overwrites[vendeur] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True
+                )
 
             ticket_channel = await guild.create_text_channel(
-                name=f"cmd-{acheteur.display_name[:18]}-{item['nom'][:10]}",
+                name=f"cmd-{acheteur.display_name[:16]}-{item['nom'][:10]}",
                 category=category,
                 overwrites=overwrites,
                 topic=f"commande|{nom_key}|{qty}|{item['vendeur_id']}"
@@ -2590,7 +2803,11 @@ class CommandeSelect(discord.ui.Select):
             embed_ticket.add_field(name="💰 Prix unit.", value=item["prix"],      inline=True)
             embed_ticket.add_field(name="🧾 Prix total", value=prix_total_str,    inline=False)
             embed_ticket.add_field(name="🛒 Acheteur",  value=acheteur.mention,  inline=True)
-            embed_ticket.add_field(name="👤 Vendeur",   value=vendeur.mention if vendeur else f"<@{item['vendeur_id']}>", inline=True)
+            embed_ticket.add_field(
+                name="👤 Vendeur",
+                value=vendeur.mention if vendeur else f"<@{item['vendeur_id']}>",
+                inline=True
+            )
             embed_ticket.set_footer(text="Vendeur : utilise !vendu pour confirmer ou refuser")
 
             await ticket_channel.send(
@@ -2634,55 +2851,38 @@ class CommandeRechercheModal(discord.ui.Modal, title="🔍 Rechercher un article
 
 class CommandeView(discord.ui.View):
     """
-    Embed de commande repensé — design clair, catégories, recherche intelligente.
+    FIX 3 : Toujours synchronisé avec le catalogue.
+    FIX : Pas de bouton refresh manuel — le refresh est automatique.
     """
     def __init__(self, guild_id: int, items: dict):
         super().__init__(timeout=None)
         self.guild_id = guild_id
-        if items:
-            self.add_item(CommandeSelect(guild_id, items))
+        # Filtre les articles fantômes avant de construire le select
+        live_items = _clean_ghost_items(items)
+        self.add_item(CommandeSelect(guild_id, live_items))
 
     @discord.ui.button(label="🔍 Rechercher", style=discord.ButtonStyle.blurple, row=1, custom_id="commande_search")
     async def recherche(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(CommandeRechercheModal(interaction.guild.id))
 
-    @discord.ui.button(label="🔄 Rafraîchir", style=discord.ButtonStyle.grey, row=1, custom_id="commande_refresh")
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        data  = load_catalogue(interaction.guild.id)
-        items = data.get("items", {})
-        if not items:
-            await interaction.followup.send("📭 Le catalogue est vide.", ephemeral=True)
-            return
-        await interaction.message.edit(
-            embed=_build_commande_embed(interaction.guild),
-            view=CommandeView(interaction.guild.id, items)
-        )
-        await interaction.followup.send("✅ Catalogue rafraîchi !", ephemeral=True)
 
-
-def _build_commande_embed(guild: discord.Guild) -> discord.Embed:
-    """
-    Embed de commande repensé — design propre, catégories, navigation claire.
-    """
-    data  = load_catalogue(guild.id)
-    items = data.get("items", {})
-
+def _build_commande_embed_from_items(guild: discord.Guild, items: dict) -> discord.Embed:
+    """Construit l'embed commandes à partir des items déjà chargés (évite double lecture)."""
     embed = discord.Embed(
         title="🛒 Boutique — Passer une commande",
         color=0x9B59B6,
         timestamp=now_utc()
     )
-    embed.set_thumbnail(url=guild.icon.url if guild.icon else discord.Embed.Empty)
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
 
-    if not items:
+    live = _clean_ghost_items(items)
+    if not live:
         embed.description = "📭 **Le catalogue est vide pour l'instant.**\nRevenez bientôt !"
     else:
-        # Regrouper par vendeur pour une meilleure lisibilité
         par_vendeur: dict[int, list] = defaultdict(list)
-        for key, item in items.items():
+        for key, item in live.items():
             par_vendeur[item["vendeur_id"]].append(item)
-
         lignes = []
         for vendeur_id, arts in par_vendeur.items():
             membre = guild.get_member(vendeur_id)
@@ -2697,22 +2897,35 @@ def _build_commande_embed(guild: discord.Guild) -> discord.Embed:
         value=(
             "📋 **Menu déroulant** → sélectionner un article\n"
             "🔍 **Rechercher** → trouver par nom ou mots-clés\n"
-            "🔄 **Rafraîchir** → mettre à jour l'affichage"
+            "🔄 Catalogue mis à jour automatiquement"
         ),
         inline=False
     )
-    embed.set_footer(text="Embed permanent · Utilisable à tout moment")
+    embed.set_footer(text="Embed permanent · Se met à jour automatiquement toutes les 3s")
     return embed
+
+
+def _build_commande_embed(guild: discord.Guild) -> discord.Embed:
+    """Version qui relit le catalogue depuis le disque."""
+    data  = load_catalogue(guild.id)
+    items = data.get("items", {})
+    return _build_commande_embed_from_items(guild, items)
 
 
 @bot.command(name="commande")
 async def commande_cmd(ctx):
+    """Pose l'embed commandes persistant dans le salon commandes."""
     if not is_staff(ctx.author):
         await ctx.send("❌ Réservé au staff.", delete_after=5); return
     data  = load_catalogue(ctx.guild.id)
     items = data.get("items", {})
-    embed = _build_commande_embed(ctx.guild)
-    await ctx.send(embed=embed, view=CommandeView(ctx.guild.id, items))
+    embed = _build_commande_embed_from_items(ctx.guild, items)
+    view  = CommandeView(ctx.guild.id, items)
+    msg   = await ctx.send(embed=embed, view=view)
+    # Sauvegarde l'ID de l'embed commandes pour le refresh automatique
+    _commande_msg_ids[ctx.guild.id] = msg.id
+    data["commande_msg_id"] = msg.id
+    save_catalogue(ctx.guild.id, data)
 
 # ═══════════════════════════════════════════════════════════════
 #  VENDU / LOG VENTES
@@ -2746,7 +2959,7 @@ class VenduView(discord.ui.View):
         guild = interaction.guild
         data  = load_catalogue(self.guild_id)
         items = data.get("items", {})
-        nom_affiche = items[self.nom_key]["nom"] if self.nom_key in items else self.nom_key
+        nom_affiche = items[self.nom_key]["nom"] if self.nom_key in items else self.nom_key.split(":")[0]
         prix_item   = items[self.nom_key].get("prix", "?") if self.nom_key in items else "?"
 
         ticket_ch = guild.get_channel(self.ticket_channel_id)
@@ -2762,8 +2975,11 @@ class VenduView(discord.ui.View):
             if items[self.nom_key]["quantite"] <= 0:
                 del items[self.nom_key]
                 await send_notif(guild, f"📭 **{nom_affiche}** épuisé et retiré du catalogue.")
+            # FIX 9 : nettoyage des articles fantômes
+            items = _clean_ghost_items(items)
             data["items"] = items
             save_catalogue(self.guild_id, data)
+            # FIX 3 : synchronisation catalogue + commandes
             await update_catalogue_message(guild, items)
 
         await _log_vente(guild=guild, acheteur_id=acheteur_id, vendeur=interaction.user,
@@ -2804,25 +3020,53 @@ class VenduView(discord.ui.View):
 
 @bot.command(name="vendu")
 async def vendu_cmd(ctx):
-    if not ctx.channel.topic or not ctx.channel.topic.startswith("commande|"):
-        await ctx.send("❌ Uniquement dans un ticket de commande.", delete_after=6); return
-    parts = ctx.channel.topic.split("|")
+    """
+    FIX 8 : Fonctionne dans tout canal dont le topic commence par 'commande|'.
+    Autorisé aux vendeurs certifiés (is_vendeur) — pas seulement au staff.
+    """
+    # Vérifie qu'on est dans un ticket de commande
+    topic = getattr(ctx.channel, "topic", None) or ""
+    if not topic.startswith("commande|"):
+        await ctx.send(
+            "❌ Cette commande s'utilise uniquement dans un ticket de commande.",
+            delete_after=6
+        )
+        return
+
+    parts = topic.split("|")
+    # Format : commande|nom_key|quantite|vendeur_id
     if len(parts) < 4:
-        await ctx.send("❌ Données du ticket invalides.", delete_after=6); return
-    _, nom_key, quantite_str, vendeur_id_str = parts[:4]
+        await ctx.send("❌ Données du ticket invalides ou corrompues.", delete_after=6)
+        return
+
+    # nom_key peut contenir des ':' (format nom_low:vendeur_id) → rejoindre les morceaux
+    _, *nom_parts, quantite_str, vendeur_id_str = parts
+    nom_key = "|".join(nom_parts)  # reconstitue la clé si elle contenait des '|'
+
     try:
         quantite   = int(quantite_str)
         vendeur_id = int(vendeur_id_str)
     except ValueError:
-        await ctx.send("❌ Données corrompues.", delete_after=6); return
+        await ctx.send("❌ Données du ticket corrompues (quantité ou vendeur_id invalide).", delete_after=6)
+        return
+
+    # Autorisé : le vendeur de l'article OU le staff
     if ctx.author.id != vendeur_id and not is_staff(ctx.author):
-        await ctx.send("❌ Seul le vendeur peut utiliser cette commande.", delete_after=6); return
+        # Dernier recours : vendeur certifié dans ce ticket
+        if not is_vendeur(ctx.author):
+            await ctx.send("❌ Seul le vendeur de l'article ou le staff peut utiliser cette commande.", delete_after=6)
+            return
+
     data        = load_catalogue(ctx.guild.id)
     items       = data.get("items", {})
-    nom_affiche = items[nom_key]["nom"] if nom_key in items else nom_key
-    embed = discord.Embed(title="📦 Confirmation de vente",
+    nom_affiche = items[nom_key]["nom"] if nom_key in items else nom_key.split(":")[0]
+
+    embed = discord.Embed(
+        title="📦 Confirmation de vente",
         description=f"Article : **{nom_affiche}**\nQuantité : **{quantite}**",
-        color=0x9B59B6, timestamp=now_utc())
+        color=0x9B59B6,
+        timestamp=now_utc()
+    )
     await ctx.send(embed=embed, view=VenduView(ctx.guild.id, vendeur_id, nom_key, quantite, ctx.channel.id))
 
 
@@ -4073,17 +4317,92 @@ async def _restore_all_games():
 
 
 async def _restore_all_catalogues():
-    """Restaure les IDs de messages du catalogue au redémarrage."""
+    """Restaure les IDs de messages du catalogue ET des commandes au redémarrage."""
     for path in CATALOGUE_DIR.glob("*.json"):
         try:
             guild_id = int(path.stem)
             data     = load_catalogue(guild_id)
-            msg_id   = data.get("msg_id")
-            if msg_id:
-                _catalogue_msg_ids[guild_id] = msg_id
-                print(f"[CATALOGUE] msg_id restauré : guild={guild_id} → {msg_id}")
+            if data.get("msg_id"):
+                _catalogue_msg_ids[guild_id] = data["msg_id"]
+                print(f"[CATALOGUE] msg_id restauré : guild={guild_id} → {data['msg_id']}")
+            if data.get("commande_msg_id"):
+                _commande_msg_ids[guild_id] = data["commande_msg_id"]
+                print(f"[COMMANDE]  commande_msg_id restauré : guild={guild_id} → {data['commande_msg_id']}")
         except Exception:
             pass
+
+
+# ─── FIX 1 : Refresh automatique catalogue + commandes toutes les 3s ──────────
+_auto_refresh_running = False
+
+async def _auto_refresh_loop():
+    """
+    Tâche de fond : met à jour catalogue + commandes toutes les 3 secondes.
+    Ne tourne qu'une seule instance (guard _auto_refresh_running).
+    Utilise le lock par guild pour ne pas entrer en conflit avec les interactions.
+    """
+    global _auto_refresh_running
+    if _auto_refresh_running:
+        return
+    _auto_refresh_running = True
+    print("[REFRESH] Boucle auto-refresh démarrée (3s)")
+    try:
+        while True:
+            await asyncio.sleep(3)
+            for guild in bot.guilds:
+                try:
+                    data  = load_catalogue(guild.id)
+                    items = _clean_ghost_items(data.get("items", {}))
+                    # Mise à jour silencieuse — ignore si aucun embed n'existe encore
+                    await _silent_refresh(guild, items)
+                except Exception as e:
+                    print(f"[REFRESH] Erreur guild={guild.id} : {e}")
+    finally:
+        _auto_refresh_running = False
+
+
+async def _silent_refresh(guild: discord.Guild, items: dict):
+    """
+    Refresh léger : édite uniquement les embeds déjà existants.
+    N'en crée pas de nouveaux (évite le spam au démarrage).
+    Utilise le lock guild pour éviter les conflits.
+    """
+    async with _get_catalogue_lock(guild.id):
+        data = load_catalogue(guild.id)
+
+        # ── Catalogue embed ──
+        cat_msg_id = data.get("msg_id") or _catalogue_msg_ids.get(guild.id)
+        if cat_msg_id:
+            cat_ch = cfg_channel(guild, "salon_catalogue")
+            if cat_ch:
+                try:
+                    msg = await cat_ch.fetch_message(cat_msg_id)
+                    await msg.edit(embed=build_catalogue_embed(items))
+                except discord.NotFound:
+                    # Message supprimé → on oublie l'ID
+                    _catalogue_msg_ids.pop(guild.id, None)
+                    data.pop("msg_id", None)
+                    save_catalogue(guild.id, data)
+                except Exception:
+                    pass
+
+        # ── Commandes embed ── (FIX 3 : synchronisation immédiate)
+        cmd_msg_id = data.get("commande_msg_id") or _commande_msg_ids.get(guild.id)
+        if cmd_msg_id:
+            cmd_ch = cfg_channel(guild, "salon_commandes")
+            if cmd_ch:
+                try:
+                    cmd_msg = await cmd_ch.fetch_message(cmd_msg_id)
+                    await cmd_msg.edit(
+                        embed=_build_commande_embed_from_items(guild, items),
+                        view=CommandeView(guild.id, items)
+                    )
+                except discord.NotFound:
+                    _commande_msg_ids.pop(guild.id, None)
+                    data.pop("commande_msg_id", None)
+                    save_catalogue(guild.id, data)
+                except Exception:
+                    pass
 
 
 async def _restore_all_objectifs():
@@ -4136,6 +4455,9 @@ async def on_ready():
     for guild in bot.guilds:
         load_config(guild.id)
         print(f"[CONFIG] Serveur configuré : {guild.name} (ID: {guild.id})")
+
+    # FIX 1 : Démarre la boucle de refresh automatique catalogue/commandes (3s)
+    asyncio.create_task(_auto_refresh_loop())
 
     print("[BOT] Prêt !")
 
