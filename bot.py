@@ -903,17 +903,19 @@ def fuzzy_search(terme: str, items: dict, seuil: float = 0.5) -> dict:
 
 async def _auto_delete_in_marche(message: discord.Message):
     """
-    FIX 2 : Dans les salons catalogue ET commandes, supprime TOUS les messages
-    après 1 seconde — y compris ceux du bot — sauf :
-      - l'embed principal du catalogue  (msg_id stocké dans data["msg_id"])
-      - l'embed principal des commandes (msg_id stocké dans data["commande_msg_id"])
+    Dans les salons catalogue ET commandes, supprime TOUS les messages après 1s,
+    y compris ceux du bot — sauf l'embed principal du catalogue et celui des commandes.
+
+    IMPORTANT : la vérification des IDs protégés se fait APRÈS le sleep d'1s,
+    pour que les commandes comme !commande aient le temps d'enregistrer leur msg_id
+    avant qu'on décide de supprimer ou non.
     """
     if not message.guild:
         return
 
-    cfg          = load_config(message.guild.id)
-    cat_ch       = resolve_channel(message.guild, cfg.get("salon_catalogue"))
-    cmd_ch       = resolve_channel(message.guild, cfg.get("salon_commandes"))
+    cfg    = load_config(message.guild.id)
+    cat_ch = resolve_channel(message.guild, cfg.get("salon_catalogue"))
+    cmd_ch = resolve_channel(message.guild, cfg.get("salon_commandes"))
 
     in_cat = cat_ch and message.channel.id == cat_ch.id
     in_cmd = cmd_ch and message.channel.id == cmd_ch.id
@@ -921,9 +923,13 @@ async def _auto_delete_in_marche(message: discord.Message):
     if not (in_cat or in_cmd):
         return
 
-    # Identifie les embeds protégés
-    data        = load_catalogue(message.guild.id)
-    protected   = {
+    # Attendre 1 seconde AVANT de vérifier les IDs protégés
+    # (laisse le temps à !commande / !catalogue de sauvegarder leur msg_id)
+    await asyncio.sleep(1)
+
+    # Relire les IDs protégés APRÈS le sleep
+    data      = load_catalogue(message.guild.id)
+    protected = {
         data.get("msg_id"),
         data.get("commande_msg_id"),
         _catalogue_msg_ids.get(message.guild.id),
@@ -932,9 +938,8 @@ async def _auto_delete_in_marche(message: discord.Message):
     protected.discard(None)
 
     if message.id in protected:
-        return  # Ne jamais supprimer les embeds principaux
+        return  # Embed principal → ne jamais supprimer
 
-    await asyncio.sleep(1)
     try:
         await message.delete()
     except Exception:
