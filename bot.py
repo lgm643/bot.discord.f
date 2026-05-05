@@ -316,8 +316,11 @@ EXEMPT_COMMANDS = {
     "giveaway", "gw",
     "pub", "say", "dit", "fermer", "stock", "recherche",
     "help", "aide", "commandes", "info", "setup",
-    # NOUVEAUX exempts
     "addobjectif", "suppobjectif", "done", "fait", "gestion",
+    # vendu → utilisé dans les tickets commandes (pas filtré par salon)
+    "vendu",
+    # cataloguesuppall → staff seulement, pas filtré par salon
+    "cataloguesuppall",
 }
 
 
@@ -2482,29 +2485,64 @@ def _parse_prix_num(prix: str) -> float | None:
 
 
 @bot.command(name="catalogue")
-async def catalogue_cmd(ctx, nom: str = None, quantite: str = None, *, prix: str = None):
+async def catalogue_cmd(ctx, *, args: str = None):
+    """
+    Syntaxe : !catalogue <nom composé possible> <quantité> <prix>
+    Exemple : !catalogue paladium ingot 10 500$
+    Le nom peut contenir des espaces. La quantité est le dernier entier avant le prix.
+    """
     if not is_vendeur(ctx.author):
-        await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5); return
-    if nom is None or quantite is None or prix is None:
-        await ctx.send("❌ `!catalogue [nom] [quantité] [prix]`", delete_after=10); return
+        await ctx.send(embed=discord.Embed(
+            title="❌ Permission insuffisante",
+            description="Réservé aux vendeurs certifiés.",
+            color=0xE74C3C
+        ), delete_after=5)
+        return
+
+    if not args:
+        await ctx.send("❌ `!catalogue <nom> <quantité> <prix>`\nExemple : `!catalogue paladium ingot 10 500$`", delete_after=10)
+        return
+
+    # ── Parsing noms composés ──
+    # On split et on cherche le dernier token entier (= quantité), ce qui précède = nom, ce qui suit = prix
+    tokens = args.split()
+    if len(tokens) < 3:
+        await ctx.send("❌ `!catalogue <nom> <quantité> <prix>`\nExemple : `!catalogue épée légendaire 5 1000$`", delete_after=10)
+        return
+
+    # Cherche le dernier token qui est un entier pur → c'est la quantité
+    qty_idx = None
+    for i in range(len(tokens) - 1, 0, -1):
+        if tokens[i].isdigit():
+            qty_idx = i
+            break
+
+    if qty_idx is None or qty_idx == 0 or qty_idx == len(tokens) - 1:
+        await ctx.send("❌ Format invalide. `!catalogue <nom> <quantité> <prix>`\nExemple : `!catalogue bloc de paladium 20 200$`", delete_after=10)
+        return
+
+    nom   = " ".join(tokens[:qty_idx])
+    prix  = " ".join(tokens[qty_idx + 1:])
     try:
-        qty = int(quantite)
-        if qty <= 0: raise ValueError
+        qty = int(tokens[qty_idx])
+        if qty <= 0:
+            raise ValueError
     except ValueError:
-        await ctx.send("❌ La quantité doit être un nombre entier positif.", delete_after=6); return
+        await ctx.send("❌ La quantité doit être un nombre entier positif.", delete_after=6)
+        return
 
     data    = load_catalogue(ctx.guild.id)
     items   = data.get("items", {})
     nom_low = nom.lower().strip()
-    my_key  = _item_key(nom, ctx.author.id)   # clé unique = nom:vendeur_id
+    my_key  = _item_key(nom, ctx.author.id)   # clé unique = nom_lower:vendeur_id
 
-    # ── FIX 5 : chercher les entrées du MÊME nom par d'AUTRES vendeurs ──
+    # ── Chercher les entrées du MÊME nom par d'AUTRES vendeurs ──
     autres = {
         k: v for k, v in items.items()
         if k.split(":")[0] == nom_low and v.get("vendeur_id") != ctx.author.id
     }
 
-    # ── FIX 6 : alerte si un autre vendeur est moins cher ──
+    # ── Alerte si un autre vendeur est moins cher ──
     prix_num = _parse_prix_num(prix)
     if autres and prix_num is not None:
         prix_min_item = min(autres.values(), key=lambda v: (_parse_prix_num(v["prix"]) or float("inf")))
@@ -2528,34 +2566,36 @@ async def catalogue_cmd(ctx, nom: str = None, quantite: str = None, *, prix: str
             try: await warn_msg.delete()
             except Exception: pass
             if not view.result:
-                await ctx.send("❌ Publication annulée.", delete_after=5)
+                await ctx.send(embed=discord.Embed(
+                    title="❌ Publication annulée",
+                    description="L'article n'a pas été ajouté.",
+                    color=0xE74C3C
+                ), delete_after=5)
                 return
 
-    # ── FIX 7 : si c'est LE MÊME vendeur avec le MÊME nom → fusionner au prix le plus bas ──
+    # ── Même vendeur + même nom → fusionner au prix le plus bas ──
     if my_key in items:
-        ancien_prix_num = _parse_prix_num(items[my_key]["prix"])
+        ancien_prix_num  = _parse_prix_num(items[my_key]["prix"])
         nouveau_prix_num = prix_num
-        # Additionne les quantités
         items[my_key]["quantite"] += qty
-        # Garde le prix le plus bas
         if ancien_prix_num is not None and nouveau_prix_num is not None:
             if nouveau_prix_num < ancien_prix_num:
-                items[my_key]["prix"] = prix  # nouveau prix est meilleur
-            # Sinon on garde l'ancien prix (plus bas)
+                items[my_key]["prix"] = prix
         else:
-            items[my_key]["prix"] = prix  # Impossible de comparer → prend le nouveau
+            items[my_key]["prix"] = prix
+        items[my_key]["updated"] = time.time()
         action = (
             f"✏️ **{nom}** mis à jour par {ctx.author.mention} — "
             f"stock : {items[my_key]['quantite']} · prix : {items[my_key]['prix']}"
         )
     else:
-        # Nouvel article pour ce vendeur
         items[my_key] = {
-            "nom":       nom,
-            "quantite":  qty,
-            "prix":      prix,
+            "nom":        nom,
+            "quantite":   qty,
+            "prix":       prix,
             "vendeur_id": ctx.author.id,
-            "created":   time.time()
+            "created":    time.time(),
+            "updated":    time.time()
         }
         action = f"➕ **{nom}** ajouté par {ctx.author.mention} — stock : {qty} · prix : {prix}"
 
@@ -2571,38 +2611,260 @@ async def catalogue_cmd(ctx, nom: str = None, quantite: str = None, *, prix: str
 
 
 @bot.command(name="cataloguesupp")
-async def cataloguesupp_cmd(ctx, nom: str = None):
+async def cataloguesupp_cmd(ctx):
+    """
+    Vendeur certifié → liste ses propres items, choisit lequel supprimer.
+    Staff → liste tous les items avec propriétaire, choisit lequel supprimer.
+    """
     if not is_vendeur(ctx.author):
-        await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5); return
-    if nom is None:
-        await ctx.send("❌ `!cataloguesupp [nom]`", delete_after=8); return
+        await ctx.send(embed=discord.Embed(
+            title="❌ Permission insuffisante",
+            description="Réservé aux vendeurs certifiés.",
+            color=0xE74C3C
+        ), delete_after=5)
+        return
 
-    data    = load_catalogue(ctx.guild.id)
-    items   = data.get("items", {})
-    my_key  = _item_key(nom, ctx.author.id)
+    data  = load_catalogue(ctx.guild.id)
+    items = data.get("items", {})
 
-    if my_key not in items:
-        # Fallback : chercher par nom uniquement (staff peut supprimer n'importe quelle entrée)
-        if is_staff(ctx.author):
-            candidates = [k for k in items if k.split(":")[0] == nom.lower().strip()]
-            if not candidates:
-                await ctx.send(f"❌ Article **{nom}** introuvable.", delete_after=6); return
-            for k in candidates:
-                del items[k]
-        else:
-            await ctx.send(f"❌ Article **{nom}** introuvable dans ton stock.", delete_after=6); return
+    staff = is_staff(ctx.author)
+
+    # ── Filtrage selon le rôle ──
+    if staff:
+        # Staff voit tout le catalogue
+        items_visibles = items
     else:
-        del items[my_key]
+        # Vendeur ne voit que ses propres items
+        items_visibles = {k: v for k, v in items.items() if v.get("vendeur_id") == ctx.author.id}
 
+    if not items_visibles:
+        await ctx.send(embed=discord.Embed(
+            title="❌ Aucun article trouvé",
+            description="Tu n'as aucun article dans le catalogue." if not staff else "Le catalogue est vide.",
+            color=0xE74C3C
+        ), delete_after=8)
+        return
+
+    # ── Construction de l'embed liste ──
+    embed = discord.Embed(
+        title="🗑️ Suppression d'article — Choisir",
+        color=0xE74C3C,
+        timestamp=now_utc()
+    )
+
+    lignes = []
+    keys_list = list(items_visibles.keys())
+    for i, key in enumerate(keys_list, 1):
+        item = items_visibles[key]
+        if staff:
+            vendeur_m = ctx.guild.get_member(item["vendeur_id"])
+            vnom = vendeur_m.display_name if vendeur_m else f"<@{item['vendeur_id']}>"
+            lignes.append(f"`{i}.` 🔹 **{item['nom']}** — 📦 {item['quantite']} · 💰 {item['prix']} · 👤 {vnom}")
+        else:
+            lignes.append(f"`{i}.` 🔹 **{item['nom']}** — 📦 {item['quantite']} · 💰 {item['prix']}")
+
+    # Discord limite les fields à 1024 chars — on coupe si besoin
+    chunk, chunks = "", []
+    for l in lignes:
+        if len(chunk) + len(l) + 1 > 1000:
+            chunks.append(chunk)
+            chunk = l
+        else:
+            chunk = (chunk + "\n" + l).strip()
+    if chunk:
+        chunks.append(chunk)
+
+    for idx, c in enumerate(chunks):
+        embed.add_field(name="\u200b" if idx > 0 else "📋 Articles disponibles", value=c, inline=False)
+
+    embed.set_footer(text="Réponds avec le numéro ou le nom exact de l'article à supprimer · 'annuler' pour quitter · 60s")
+    msg_list = await ctx.send(embed=embed)
+
+    # ── Attente de la réponse ──
+    def chk(m):
+        return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id
+
+    try:
+        resp = await bot.wait_for("message", check=chk, timeout=60)
+    except asyncio.TimeoutError:
+        try: await msg_list.delete()
+        except Exception: pass
+        await ctx.send(embed=discord.Embed(
+            title="⏰ Temps écoulé",
+            description="Suppression annulée.",
+            color=0xE67E22
+        ), delete_after=6)
+        return
+
+    try: await resp.delete()
+    except Exception: pass
+    try: await msg_list.delete()
+    except Exception: pass
+
+    contenu = resp.content.strip()
+
+    if contenu.lower() == "annuler":
+        await ctx.send(embed=discord.Embed(
+            title="❌ Annulé",
+            description="Aucun article supprimé.",
+            color=0x95A5A6
+        ), delete_after=5)
+        return
+
+    # ── Résolution : numéro ou nom ──
+    target_key = None
+
+    # Essai par numéro
+    if contenu.isdigit():
+        idx = int(contenu) - 1
+        if 0 <= idx < len(keys_list):
+            target_key = keys_list[idx]
+
+    # Essai par nom exact (insensible à la casse)
+    if target_key is None:
+        contenu_low = contenu.lower()
+        for k, v in items_visibles.items():
+            if v["nom"].lower() == contenu_low or k.split(":")[0] == contenu_low:
+                target_key = k
+                break
+
+    if target_key is None:
+        await ctx.send(embed=discord.Embed(
+            title="❌ Article introuvable",
+            description=f"Aucun article correspondant à **{contenu}**.",
+            color=0xE74C3C
+        ), delete_after=8)
+        return
+
+    # ── Vérification des droits ──
+    item_cible = items.get(target_key)
+    if not item_cible:
+        await ctx.send(embed=discord.Embed(
+            title="❌ Article introuvable",
+            description="Cet article n'existe plus dans le catalogue.",
+            color=0xE74C3C
+        ), delete_after=8)
+        return
+
+    # Un vendeur non-staff ne peut supprimer que ses propres articles
+    if not staff and item_cible.get("vendeur_id") != ctx.author.id:
+        await ctx.send(embed=discord.Embed(
+            title="❌ Permission insuffisante",
+            description="Tu ne peux supprimer que tes propres articles.",
+            color=0xE74C3C
+        ), delete_after=6)
+        return
+
+    nom_supp = item_cible["nom"]
+    del items[target_key]
     data["items"] = items
     save_catalogue(ctx.guild.id, data)
     await update_catalogue_message(ctx.guild, items)
-    await send_notif(ctx.guild, f"🗑️ **{nom}** supprimé du catalogue par {ctx.author.mention}")
+    await send_notif(ctx.guild, f"🗑️ **{nom_supp}** supprimé du catalogue par {ctx.author.mention}")
+    await send_log(ctx.guild, discord.Embed(
+        title="🗑️ Article supprimé du catalogue",
+        description=f"**{nom_supp}** retiré par {ctx.author.mention}",
+        color=0xE74C3C,
+        timestamp=now_utc()
+    ))
     await ctx.send(embed=discord.Embed(
         title="✅ Article supprimé",
-        description=f"**{nom}** retiré du catalogue.",
+        description=f"**{nom_supp}** a été retiré du catalogue.",
         color=0x2ECC71
     ), delete_after=8)
+
+
+class _SuppAllView(discord.ui.View):
+    """Confirmation avant suppression totale du catalogue."""
+    def __init__(self, author_id: int):
+        super().__init__(timeout=30)
+        self.author_id = author_id
+        self.result    = None
+
+    async def interaction_check(self, i):
+        return i.user.id == self.author_id
+
+    @discord.ui.button(label="✅ Confirmer — Tout supprimer", style=discord.ButtonStyle.red)
+    async def confirmer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.result = True
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.grey)
+    async def annuler(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.result = False
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
+
+
+@bot.command(name="cataloguesuppall")
+async def cataloguesuppall_cmd(ctx):
+    """Staff uniquement — vide entièrement le catalogue avec confirmation."""
+    if not is_staff(ctx.author):
+        await ctx.send(embed=discord.Embed(
+            title="❌ Permission insuffisante",
+            description="Cette commande est réservée au staff.",
+            color=0xE74C3C
+        ), delete_after=5)
+        return
+
+    data  = load_catalogue(ctx.guild.id)
+    items = data.get("items", {})
+
+    if not items:
+        await ctx.send(embed=discord.Embed(
+            title="📭 Catalogue vide",
+            description="Il n'y a aucun article à supprimer.",
+            color=0x95A5A6
+        ), delete_after=6)
+        return
+
+    nb = len(items)
+    warn = discord.Embed(
+        title="⚠️ Suppression totale du catalogue",
+        description=(
+            f"Tu es sur le point de supprimer **{nb} article(s)** du catalogue.\n\n"
+            f"**Cette action est irréversible.**\n\n"
+            f"Confirmes-tu ?"
+        ),
+        color=0xE74C3C,
+        timestamp=now_utc()
+    )
+    view     = _SuppAllView(ctx.author.id)
+    warn_msg = await ctx.send(embed=warn, view=view)
+    await view.wait()
+
+    try: await warn_msg.delete()
+    except Exception: pass
+
+    if not view.result:
+        await ctx.send(embed=discord.Embed(
+            title="❌ Annulé",
+            description="Le catalogue n'a pas été modifié.",
+            color=0x95A5A6
+        ), delete_after=5)
+        return
+
+    # ── Suppression totale ──
+    data["items"] = {}
+    save_catalogue(ctx.guild.id, data)
+    await update_catalogue_message(ctx.guild, {})
+    await send_notif(ctx.guild, f"🗑️ Le catalogue a été entièrement vidé par {ctx.author.mention}.")
+    await send_log(ctx.guild, discord.Embed(
+        title="🗑️ Catalogue entièrement supprimé",
+        description=f"Vidé par {ctx.author.mention} — {nb} article(s) supprimé(s).",
+        color=0xE74C3C,
+        timestamp=now_utc()
+    ))
+    await ctx.send(embed=discord.Embed(
+        title="✅ Catalogue entièrement supprimé",
+        description=f"**{nb} article(s)** ont été supprimés par {ctx.author.mention}.",
+        color=0x2ECC71
+    ), delete_after=10)
 
 
 @bot.command(name="stock")
@@ -3026,41 +3288,54 @@ class VenduView(discord.ui.View):
 @bot.command(name="vendu")
 async def vendu_cmd(ctx):
     """
-    FIX 8 : Fonctionne dans tout canal dont le topic commence par 'commande|'.
-    Autorisé aux vendeurs certifiés (is_vendeur) — pas seulement au staff.
+    Utilisable UNIQUEMENT dans un ticket market (topic commence par 'commande|').
+    Autorisé : vendeurs certifiés ET staff.
+    Refusé : tout autre membre → embed rouge.
     """
-    # Vérifie qu'on est dans un ticket de commande
+    # ── Vérification : bon salon (ticket market) ──
     topic = getattr(ctx.channel, "topic", None) or ""
     if not topic.startswith("commande|"):
-        await ctx.send(
-            "❌ Cette commande s'utilise uniquement dans un ticket de commande.",
-            delete_after=6
-        )
+        await ctx.send(embed=discord.Embed(
+            title="❌ Mauvais salon",
+            description="Cette commande s'utilise uniquement dans un **ticket de commande market**.",
+            color=0xE74C3C
+        ), delete_after=6)
         return
 
+    # ── Vérification des permissions : vendeur certifié OU staff ──
+    if not is_vendeur(ctx.author):
+        await ctx.send(embed=discord.Embed(
+            title="❌ Vous n'avez pas la permission d'utiliser cette commande",
+            description="Cette commande est réservée aux **vendeurs certifiés** et au **staff**.",
+            color=0xE74C3C
+        ), delete_after=8)
+        return
+
+    # ── Parsing du topic ──
     parts = topic.split("|")
-    # Format : commande|nom_key|quantite|vendeur_id
     if len(parts) < 4:
-        await ctx.send("❌ Données du ticket invalides ou corrompues.", delete_after=6)
+        await ctx.send(embed=discord.Embed(
+            title="❌ Ticket invalide",
+            description="Les données de ce ticket sont invalides ou corrompues.",
+            color=0xE74C3C
+        ), delete_after=6)
         return
 
-    # nom_key peut contenir des ':' (format nom_low:vendeur_id) → rejoindre les morceaux
+    # Format : commande|nom_key|quantite|vendeur_id
+    # nom_key peut contenir des ':' → on reconstitue
     _, *nom_parts, quantite_str, vendeur_id_str = parts
-    nom_key = "|".join(nom_parts)  # reconstitue la clé si elle contenait des '|'
+    nom_key = "|".join(nom_parts)
 
     try:
         quantite   = int(quantite_str)
         vendeur_id = int(vendeur_id_str)
     except ValueError:
-        await ctx.send("❌ Données du ticket corrompues (quantité ou vendeur_id invalide).", delete_after=6)
+        await ctx.send(embed=discord.Embed(
+            title="❌ Données corrompues",
+            description="Impossible de lire la quantité ou l'ID vendeur du ticket.",
+            color=0xE74C3C
+        ), delete_after=6)
         return
-
-    # Autorisé : le vendeur de l'article OU le staff
-    if ctx.author.id != vendeur_id and not is_staff(ctx.author):
-        # Dernier recours : vendeur certifié dans ce ticket
-        if not is_vendeur(ctx.author):
-            await ctx.send("❌ Seul le vendeur de l'article ou le staff peut utiliser cette commande.", delete_after=6)
-            return
 
     data        = load_catalogue(ctx.guild.id)
     items       = data.get("items", {})
@@ -3068,7 +3343,11 @@ async def vendu_cmd(ctx):
 
     embed = discord.Embed(
         title="📦 Confirmation de vente",
-        description=f"Article : **{nom_affiche}**\nQuantité : **{quantite}**",
+        description=(
+            f"Article : **{nom_affiche}**\n"
+            f"Quantité : **{quantite}**\n\n"
+            f"Confirme ou annule la transaction."
+        ),
         color=0x9B59B6,
         timestamp=now_utc()
     )
@@ -4226,12 +4505,13 @@ async def help_cmd(ctx):
         name="━━━━━━━━━━━━━━━━━━\n🏪 Marché",
         value=(
             "`!recherche [item]` — Chercher un article (recherche intelligente)\n"
-            "`!catalogue [nom] [qté] [prix]` 🏷️ — Ajouter/MAJ article\n"
-            "`!cataloguesupp [nom]` 🏷️ — Supprimer article\n"
+            "`!catalogue <nom> <qté> <prix>` 🏷️ — Ajouter/MAJ article (noms composés supportés)\n"
+            "`!cataloguesupp` 🏷️ — Supprimer un de ses articles (liste interactive)\n"
+            "`!cataloguesuppall` 🔒 — Vider entièrement le catalogue\n"
             "`!stock [@membre]` 🏷️ — Voir son stock\n"
             "`!gestion` 🏷️ — Gestion interactive du stock\n"
             "`!commande` 🔒 — Menu de commande interactif\n"
-            "`!vendu` 🏷️ — Confirmer/annuler une vente\n"
+            "`!vendu` 🏷️ — Confirmer/annuler une vente (dans ticket market)\n"
             "`!role` 🔒 — Bouton toggle notifications"
         ),
         inline=False
