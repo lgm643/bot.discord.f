@@ -4550,15 +4550,82 @@ class _KeySelect(discord.ui.Select):
             cfg[key] = clean
 
         save_config(guild.id, cfg)
+        val_saved = cfg[key]
+        new_fmt   = _fmt_cfg_val(guild, key, val_saved)
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="✅ Configuration mise à jour",
+                description=f"**{label}**\n`{key}` → {new_fmt}",
+                color=0x2ECC71,
+                timestamp=now_utc()
+            ),
+            ephemeral=True
+        )
+        embed = _build_group_embed(guild, self.group)
+        view  = _GroupView(self.author_id, self.group, self.orig_msg)
+        await self.orig_msg.edit(embed=embed, view=view)
 
-        val_saved   = cfg[key]
-        @bot.event
+
+class _GroupView(discord.ui.View):
+    def __init__(self, author_id: int, group: str, orig_msg: discord.Message):
+        super().__init__(timeout=300)
+        self.author_id = author_id
+        self.group     = group
+        self.orig_msg  = orig_msg
+        self.add_item(_KeySelect(author_id, group, orig_msg))
+
+    async def on_timeout(self):
+        try:
+            for item in self.children:
+                item.disabled = True
+            await self.orig_msg.edit(view=self)
+        except Exception:
+            pass
+
+    @discord.ui.button(label="🏠 Retour", style=discord.ButtonStyle.grey, row=1)
+    async def retour(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True)
+            return
+        embed = _build_home_embed(interaction.guild)
+        view  = _HomeView(self.author_id, self.orig_msg)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    @discord.ui.button(label="❌ Fermer", style=discord.ButtonStyle.red, row=1)
+    async def fermer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True)
+            return
+        self.stop()
+        try: await interaction.message.delete()
+        except Exception: pass
+        await interaction.response.send_message("👋 Configuration fermée.", ephemeral=True)
+
+
+@bot.command(name="config", aliases=["cfg"])
+async def config_cmd(ctx):
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Réservé aux administrateurs.", delete_after=5)
+        return
+    embed = _build_home_embed(ctx.guild)
+    view  = _HomeView(ctx.author.id)
+    msg   = await ctx.send(embed=embed, view=view)
+    view.msg      = msg
+    view.msg      = msg
+
+
+# ═══════════════════════════════════════════════════════════════
+#  DÉMARRAGE
+# ═══════════════════════════════════════════════════════════════
+
+@bot.event
 async def on_ready():
     bot.add_view(ObjectifView())
     bot.add_view(TicketView())
     bot.add_view(RoleToggleView())
     await _cache_all_invites()
     print(f"✅ Connecté en tant que {bot.user} ({bot.user.id})")
+
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
 bot.run(TOKEN)
