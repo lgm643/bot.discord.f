@@ -4552,7 +4552,6 @@ class SetupMainView(discord.ui.View):
                 "❌ Seul l'administrateur qui a lancé `!setup` peut interagir.", ephemeral=True)
             return False
         return True
-
     async def on_timeout(self):
         if self.msg:
             try: await self.msg.delete()
