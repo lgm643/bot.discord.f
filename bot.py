@@ -4790,3 +4790,33 @@ class _HomeView(discord.ui.View):
 
 class _KeySelect(discord.ui.Select):
     def __init__(self, author_id: int, group: str, orig_msg: discord)
+@bot.event
+async def on_ready():
+    print(f"[BOT] Connecté : {bot.user} (ID: {bot.user.id})")
+    print(f"[BOT] Serveurs : {[g.name for g in bot.guilds]}")
+
+    # Ré-enregistre les vues persistantes
+    bot.add_view(TicketView())
+    bot.add_view(RoleToggleView())
+
+    # Restaure les états persistants
+    await _restore_all_games()
+    await _restore_all_catalogues()
+    await _restore_all_objectifs()   # NOUVEAU
+
+    # Charge/crée les configs de chaque serveur
+    for guild in bot.guilds:
+        load_config(guild.id)
+        print(f"[CONFIG] Serveur configuré : {guild.name} (ID: {guild.id})")
+
+    # FIX 1 : Démarre la boucle de refresh automatique catalogue/commandes (3s)
+    asyncio.create_task(_auto_refresh_loop())
+
+    print("[BOT] Prêt !")
+
+# ═══════════════════════════════════════════════════════════════
+#  LANCEMENT
+# ═══════════════════════════════════════════════════════════════
+
+TOKEN = os.environ.get("DISCORD_TOKEN")
+bot.run(TOKEN)
