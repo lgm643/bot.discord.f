@@ -4790,6 +4790,12 @@ class _HomeView(discord.ui.View):
 
 class _KeySelect(discord.ui.Select):
     def __init__(self, author_id: int, group: str, orig_msg: discord.Message):
+        super().__init__()
+        self.author_id = author_id
+        self.group = group
+        self.orig_msg = orig_msg
+
+
 @bot.event
 async def on_ready():
     print(f"[BOT] Connecté : {bot.user} (ID: {bot.user.id})")
