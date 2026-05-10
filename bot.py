@@ -4552,3 +4552,13 @@ class _KeySelect(discord.ui.Select):
         save_config(guild.id, cfg)
 
         val_saved   = cfg[key]
+        @bot.event
+async def on_ready():
+    bot.add_view(ObjectifView())
+    bot.add_view(TicketView())
+    bot.add_view(RoleToggleView())
+    await _cache_all_invites()
+    print(f"✅ Connecté en tant que {bot.user} ({bot.user.id})")
+
+TOKEN = os.environ.get("DISCORD_TOKEN")
+bot.run(TOKEN)
