@@ -4789,4 +4789,4 @@ class _HomeView(discord.ui.View):
 
 
 class _KeySelect(discord.ui.Select):
-    def __init__(self, author_id: int, group: str, orig_msg: discord.
+    def __init__(self, author_id: int, group: str, orig_msg: discord)
