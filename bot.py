@@ -39,14 +39,12 @@ for d in [CONFIG_DIR, DATA_DIR, GAMES_DIR, CATALOGUE_DIR, DB_PATH.parent]:
 # ═══════════════════════════════════════════════════════════════
 
 def get_db() -> sqlite3.Connection:
-    """Retourne une connexion SQLite thread-safe."""
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
-    """Crée les tables si elles n'existent pas."""
     with get_db() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS objectifs (
@@ -58,9 +56,18 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS objectif_embeds (
-                guild_id INTEGER PRIMARY KEY,
+                guild_id   INTEGER PRIMARY KEY,
                 channel_id INTEGER,
                 msg_id     INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS invitations (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id    INTEGER NOT NULL,
+                inviter_id  INTEGER NOT NULL,
+                invitee_id  INTEGER NOT NULL,
+                invitee_name TEXT   NOT NULL,
+                joined_at   REAL    NOT NULL
             );
         """)
 
@@ -90,8 +97,8 @@ DEFAULT_CONFIG = {
     "salon_recherche":      "catalogue",
     "salon_ventes_log":     "logs-ventes",
     "salon_cmds_allowed":   ["bot-commands", "commandes"],
-    "salon_objectifs":      "",          # NOUVEAU — salon objectifs
-    "salon_gestion":        "",          # NOUVEAU — salon gestion stock
+    "salon_objectifs":      "",
+    "salon_gestion":        "",
     "categorie_tickets":    "Tickets",
     "categorie_commandes":  "Commandes",
     "alt_min_days":         30,
@@ -317,9 +324,9 @@ EXEMPT_COMMANDS = {
     "pub", "say", "dit", "fermer", "stock", "recherche",
     "help", "aide", "commandes", "info", "setup",
     "addobjectif", "suppobjectif", "done", "fait", "gestion",
-    # vendu → utilisé dans les tickets commandes (pas filtré par salon)
+    "objectif",
+    "invite",
     "vendu",
-    # cataloguesuppall → staff seulement, pas filtré par salon
     "cataloguesuppall",
 }
 
@@ -328,25 +335,20 @@ EXEMPT_COMMANDS = {
 async def check_command_channel(ctx: commands.Context) -> bool:
     cmd = ctx.command.name if ctx.command else ""
 
-    # ── Commandes toujours exemptées du filtre salon ──
     if cmd in EXEMPT_COMMANDS:
         return True
 
-    # ── Staff → accès libre (sauf restrictions marché ci-dessous) ──
     staff = is_staff(ctx.author)
 
-    # ── FIX 4 : !catalogue et !gestion → UNIQUEMENT dans gestion-stock ou commandes ──
     if cmd in {"catalogue", "cataloguesupp", "gestion"}:
         if not is_vendeur(ctx.author):
             await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5)
             return False
-        # Salons autorisés : gestion-stock (salon_gestion) + commandes (salon_commandes)
         allowed_ids: set[int] = set()
         gestion_ch  = cfg_channel(ctx.guild, "salon_gestion")
         commande_ch = cfg_channel(ctx.guild, "salon_commandes")
         if gestion_ch:  allowed_ids.add(gestion_ch.id)
         if commande_ch: allowed_ids.add(commande_ch.id)
-        # Fallback : si aucun des deux n'est configuré, le staff peut l'utiliser partout
         if not allowed_ids:
             return staff or True
         if ctx.channel.id not in allowed_ids:
@@ -357,7 +359,6 @@ async def check_command_channel(ctx: commands.Context) -> bool:
             return False
         return True
 
-    # ── Autres commandes → salons_cmds_allowed standard ──
     if staff:
         return True
     allowed = cfg_channels(ctx.guild, "salon_cmds_allowed")
@@ -490,13 +491,12 @@ def load_games_for(guild_id: int) -> dict:
 #  CATALOGUE
 # ═══════════════════════════════════════════════════════════════
 
-_catalogue_msg_ids:  dict[int, int] = {}   # guild_id → catalogue msg_id
-_commande_msg_ids:   dict[int, int] = {}   # guild_id → commande embed msg_id
+_catalogue_msg_ids:  dict[int, int] = {}
+_commande_msg_ids:   dict[int, int] = {}
 _pending_orders:     dict[str, bool] = {}
-_catalogue_lock:     dict[int, asyncio.Lock] = {}  # guild_id → lock anti-double refresh
+_catalogue_lock:     dict[int, asyncio.Lock] = {}
 
-# ─── clé unique par article + vendeur ────────────────────────────────────────
-# Format: "{nom_lower}:{vendeur_id}"  → permet plusieurs vendeurs pour un même nom
+
 def _item_key(nom: str, vendeur_id: int) -> str:
     return f"{nom.lower().strip()}:{vendeur_id}"
 
@@ -528,12 +528,10 @@ def save_catalogue(guild_id: int, data: dict):
 
 
 def _clean_ghost_items(items: dict) -> dict:
-    """Supprime les articles avec quantité ≤ 0 (articles fantômes)."""
     return {k: v for k, v in items.items() if v.get("quantite", 0) > 0}
 
 
 def build_catalogue_embed(items: dict) -> discord.Embed:
-    """Embed catalogue groupé par vendeur — clés au format nom:vendeur_id."""
     embed = discord.Embed(
         title="🏪 Catalogue",
         description="Articles disponibles à la vente :",
@@ -543,7 +541,6 @@ def build_catalogue_embed(items: dict) -> discord.Embed:
     if not items:
         embed.add_field(name="📭 Aucun article", value="Le catalogue est vide.", inline=False)
     else:
-        # Grouper par vendeur
         par_vendeur: dict[int, list] = defaultdict(list)
         for key, item in items.items():
             par_vendeur[item["vendeur_id"]].append(item)
@@ -565,15 +562,10 @@ def _get_catalogue_lock(guild_id: int) -> asyncio.Lock:
 
 
 async def update_catalogue_message(guild: discord.Guild, items: dict):
-    """
-    Met à jour l'embed catalogue ET l'embed commandes simultanément.
-    Utilise un lock par guild pour éviter les conflits de refresh.
-    """
     async with _get_catalogue_lock(guild.id):
         items = _clean_ghost_items(items)
         data  = load_catalogue(guild.id)
 
-        # ── Catalogue embed ──
         cat_ch = cfg_channel(guild, "salon_catalogue")
         if cat_ch:
             embed  = build_catalogue_embed(items)
@@ -591,7 +583,6 @@ async def update_catalogue_message(guild: discord.Guild, items: dict):
                 _catalogue_msg_ids[guild.id] = msg.id
                 data["msg_id"] = msg.id
 
-        # ── Commandes embed (synchronisation immédiate) ──
         cmd_ch = cfg_channel(guild, "salon_commandes")
         if cmd_ch:
             cmd_embed = _build_commande_embed_from_items(guild, items)
@@ -605,9 +596,7 @@ async def update_catalogue_message(guild: discord.Guild, items: dict):
                     cmd_msg = await cmd_ch.send(embed=cmd_embed, view=cmd_view)
                     _commande_msg_ids[guild.id] = cmd_msg.id
                     data["commande_msg_id"] = cmd_msg.id
-            # Ne recrée pas si aucun embed commandes n'existe encore
 
-        # Sauvegarde les items nettoyés
         data["items"] = items
         save_catalogue(guild.id, data)
 
@@ -662,7 +651,7 @@ async def send_ticket_log(guild, ticket_channel, closer):
         print(f"[LOG] Erreur ticket : {e}")
 
 # ═══════════════════════════════════════════════════════════════
-#  ROSTER — affiche display_name, jamais la mention brute
+#  ROSTER
 # ═══════════════════════════════════════════════════════════════
 
 def build_roster_embed(guild: discord.Guild) -> discord.Embed:
@@ -691,7 +680,6 @@ def build_roster_embed(guild: discord.Guild) -> discord.Embed:
             continue
         for rid in ordered_keys:
             if any(r.id == rid for r in member.roles):
-                # Toujours utiliser display_name — jamais la mention brute
                 name = member.display_name or member.name
                 categories[rid]["members"].append(name)
                 break
@@ -711,8 +699,12 @@ def build_roster_embed(guild: discord.Guild) -> discord.Embed:
     return embed
 
 # ═══════════════════════════════════════════════════════════════
-#  OBJECTIFS — SQLITE
+#  OBJECTIFS — SQLITE (REFONTE COMPLÈTE)
 # ═══════════════════════════════════════════════════════════════
+
+# Cache des messages embed objectifs par guild (guild_id -> message live)
+_objectif_msg_cache: dict[int, discord.Message] = {}
+
 
 def db_get_objectifs(guild_id: int) -> list[sqlite3.Row]:
     with get_db() as conn:
@@ -740,10 +732,16 @@ def db_del_objectif(guild_id: int, obj_id: int) -> bool:
 
 def db_done_objectif(guild_id: int, obj_id: int) -> bool:
     with get_db() as conn:
-        cur = conn.execute(
+        # Vérifie si l'objectif existe et n'est pas déjà terminé
+        row = conn.execute(
+            "SELECT done FROM objectifs WHERE id=? AND guild_id=?", (obj_id, guild_id)
+        ).fetchone()
+        if not row:
+            return False
+        conn.execute(
             "UPDATE objectifs SET done=1 WHERE id=? AND guild_id=?", (obj_id, guild_id)
         )
-        return cur.rowcount > 0
+        return True
 
 
 def db_get_objectif_embed(guild_id: int) -> sqlite3.Row | None:
@@ -762,56 +760,401 @@ def db_save_objectif_embed(guild_id: int, channel_id: int, msg_id: int):
 
 
 def build_objectifs_embed(guild_id: int) -> discord.Embed:
-    """Construit l'embed persistant des objectifs."""
+    """Construit l'embed principal des objectifs — moderne, clair, avec numérotation."""
     objectifs = db_get_objectifs(guild_id)
+
     embed = discord.Embed(
         title="🎯 Objectifs du serveur",
         color=0x9B59B6,
         timestamp=now_utc()
     )
+
     if not objectifs:
-        embed.description = "_Aucun objectif pour le moment. Utilisez `!addobjectif <texte>`_"
+        embed.description = (
+            "_Aucun objectif pour le moment._\n\n"
+            "Utilisez les boutons ci-dessous pour en ajouter un !"
+        )
     else:
+        total   = len(objectifs)
+        done_nb = sum(1 for o in objectifs if o["done"])
+        pct     = int(done_nb / total * 100) if total else 0
+        bar_len = 12
+        filled  = int(bar_len * done_nb / total) if total else 0
+        bar     = "█" * filled + "░" * (bar_len - filled)
+
         lignes = []
         for obj in objectifs:
-            check = "✅" if obj["done"] else "🔲"
-            texte = f"~~{obj['texte']}~~" if obj["done"] else obj["texte"]
-            lignes.append(f"`#{obj['id']}` {check} {texte}")
+            if obj["done"]:
+                lignes.append(f"✅ **{obj['id']}.** ~~{obj['texte']}~~")
+            else:
+                lignes.append(f"⏳ **{obj['id']}.** {obj['texte']}")
+
         embed.description = "\n".join(lignes)
-    embed.set_footer(text="!addobjectif <texte> · !suppobjectif <id> · !done <id>")
+        embed.add_field(
+            name="📊 Progression",
+            value=f"`{bar}` {done_nb}/{total} ({pct}%)",
+            inline=False
+        )
+
+    embed.set_footer(text="Gérez les objectifs avec les boutons ci-dessous")
     return embed
 
 
+class ObjectifView(discord.ui.View):
+    """
+    Vue persistante attachée à l'embed des objectifs.
+    Trois boutons : Ajouter, Supprimer, Terminer.
+    Chaque action est réservée au staff.
+    """
+
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=None)
+        self.guild_id = guild_id
+
+    # ── Ajouter ──────────────────────────────────────────────
+    @discord.ui.button(
+        label="➕ Ajouter",
+        style=discord.ButtonStyle.green,
+        custom_id="objectif_ajouter"
+    )
+    async def ajouter(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_staff(interaction.user):
+            await interaction.response.send_message(
+                "❌ Réservé au staff.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="➕ Ajouter un objectif",
+                description=(
+                    "Écris le **texte de l'objectif** dans ce salon.\n"
+                    "*(60 secondes pour répondre — tape `annuler` pour quitter)*"
+                ),
+                color=0x3498DB,
+                timestamp=now_utc()
+            ),
+            ephemeral=True
+        )
+
+        def chk(m: discord.Message) -> bool:
+            return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
+
+        try:
+            msg = await bot.wait_for("message", check=chk, timeout=60)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("⏰ Temps écoulé. Aucun objectif ajouté.", ephemeral=True)
+            return
+
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+        if msg.content.strip().lower() == "annuler":
+            await interaction.followup.send("❌ Ajout annulé.", ephemeral=True)
+            return
+
+        texte  = msg.content.strip()
+        obj_id = db_add_objectif(interaction.guild.id, texte)
+
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="✅ Objectif ajouté",
+                description=f"`#{obj_id}` — {texte}",
+                color=0x2ECC71,
+                timestamp=now_utc()
+            ),
+            ephemeral=True
+        )
+        await refresh_objectifs_embed(interaction.guild)
+
+    # ── Supprimer ─────────────────────────────────────────────
+    @discord.ui.button(
+        label="🗑 Supprimer",
+        style=discord.ButtonStyle.red,
+        custom_id="objectif_supprimer"
+    )
+    async def supprimer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_staff(interaction.user):
+            await interaction.response.send_message(
+                "❌ Réservé au staff.", ephemeral=True
+            )
+            return
+
+        objectifs = db_get_objectifs(interaction.guild.id)
+        if not objectifs:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Aucun objectif",
+                    description="Il n'y a aucun objectif à supprimer.",
+                    color=0xE74C3C
+                ),
+                ephemeral=True
+            )
+            return
+
+        lignes = "\n".join(
+            f"{'✅' if o['done'] else '⏳'} `#{o['id']}` — {o['texte']}"
+            for o in objectifs
+        )
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="🗑 Supprimer un objectif",
+                description=(
+                    f"{lignes}\n\n"
+                    "Tape le **numéro** (`#id`) de l'objectif à supprimer.\n"
+                    "*(60 secondes — `annuler` pour quitter)*"
+                ),
+                color=0xE74C3C,
+                timestamp=now_utc()
+            ),
+            ephemeral=True
+        )
+
+        def chk(m: discord.Message) -> bool:
+            return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
+
+        try:
+            msg = await bot.wait_for("message", check=chk, timeout=60)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("⏰ Temps écoulé.", ephemeral=True)
+            return
+
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+        if msg.content.strip().lower() == "annuler":
+            await interaction.followup.send("❌ Suppression annulée.", ephemeral=True)
+            return
+
+        raw = msg.content.strip().lstrip("#")
+        try:
+            obj_id = int(raw)
+        except ValueError:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Numéro invalide",
+                    description=f"**{raw}** n'est pas un numéro valide.",
+                    color=0xE74C3C
+                ),
+                ephemeral=True
+            )
+            return
+
+        ok = db_del_objectif(interaction.guild.id, obj_id)
+        if not ok:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Objectif introuvable",
+                    description=f"L'objectif `#{obj_id}` n'existe pas.",
+                    color=0xE74C3C
+                ),
+                ephemeral=True
+            )
+            return
+
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="✅ Objectif supprimé",
+                description=f"L'objectif `#{obj_id}` a été supprimé.",
+                color=0x2ECC71,
+                timestamp=now_utc()
+            ),
+            ephemeral=True
+        )
+        await refresh_objectifs_embed(interaction.guild)
+
+    # ── Terminer ──────────────────────────────────────────────
+    @discord.ui.button(
+        label="✅ Terminer",
+        style=discord.ButtonStyle.blurple,
+        custom_id="objectif_terminer"
+    )
+    async def terminer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_staff(interaction.user):
+            await interaction.response.send_message(
+                "❌ Réservé au staff.", ephemeral=True
+            )
+            return
+
+        objectifs = db_get_objectifs(interaction.guild.id)
+        en_cours  = [o for o in objectifs if not o["done"]]
+
+        if not en_cours:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="✅ Tout est terminé !",
+                    description="Tous les objectifs sont déjà cochés.",
+                    color=0x2ECC71
+                ),
+                ephemeral=True
+            )
+            return
+
+        lignes = "\n".join(
+            f"⏳ `#{o['id']}` — {o['texte']}"
+            for o in en_cours
+        )
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="✅ Marquer comme terminé",
+                description=(
+                    f"**Objectifs en cours :**\n{lignes}\n\n"
+                    "Tape le **numéro** (`#id`) de l'objectif accompli.\n"
+                    "*(60 secondes — `annuler` pour quitter)*"
+                ),
+                color=0x2ECC71,
+                timestamp=now_utc()
+            ),
+            ephemeral=True
+        )
+
+        def chk(m: discord.Message) -> bool:
+            return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
+
+        try:
+            msg = await bot.wait_for("message", check=chk, timeout=60)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("⏰ Temps écoulé.", ephemeral=True)
+            return
+
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+        if msg.content.strip().lower() == "annuler":
+            await interaction.followup.send("❌ Annulé.", ephemeral=True)
+            return
+
+        raw = msg.content.strip().lstrip("#")
+        try:
+            obj_id = int(raw)
+        except ValueError:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Numéro invalide",
+                    description=f"**{raw}** n'est pas un numéro valide.",
+                    color=0xE74C3C
+                ),
+                ephemeral=True
+            )
+            return
+
+        ok = db_done_objectif(interaction.guild.id, obj_id)
+        if not ok:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ Objectif introuvable",
+                    description=f"L'objectif `#{obj_id}` n'existe pas ou est déjà terminé.",
+                    color=0xE74C3C
+                ),
+                ephemeral=True
+            )
+            return
+
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="✅ Objectif terminé !",
+                description=f"L'objectif `#{obj_id}` a été marqué comme accompli ✅",
+                color=0x2ECC71,
+                timestamp=now_utc()
+            ),
+            ephemeral=True
+        )
+        await refresh_objectifs_embed(interaction.guild)
+
+
 async def refresh_objectifs_embed(guild: discord.Guild):
-    """Met à jour l'embed persistant des objectifs. Le recrée si introuvable."""
-    row = db_get_objectif_embed(guild.id)
+    """
+    Met à jour l'embed persistant des objectifs.
+    Le recrée si le message n'existe plus.
+    Attache toujours la vue interactive ObjectifView.
+    """
+    row   = db_get_objectif_embed(guild.id)
     embed = build_objectifs_embed(guild.id)
+    view  = ObjectifView(guild.id)
 
     if row:
         channel = guild.get_channel(row["channel_id"])
         if channel:
             try:
                 msg = await channel.fetch_message(row["msg_id"])
-                await msg.edit(embed=embed)
+                await msg.edit(embed=embed, view=view)
+                _objectif_msg_cache[guild.id] = msg
                 return
-            except Exception:
+            except discord.NotFound:
                 pass
-        # Message introuvable → recrée dans le même salon ou dans salon_objectifs
+            except Exception as e:
+                print(f"[OBJECTIFS] Erreur édition : {e}")
+
+        # Message introuvable → recrée dans le même salon ou salon_objectifs
         if channel is None:
             channel = cfg_channel(guild, "salon_objectifs")
         if channel:
-            msg = await channel.send(embed=embed)
+            msg = await channel.send(embed=embed, view=view)
             db_save_objectif_embed(guild.id, channel.id, msg.id)
+            _objectif_msg_cache[guild.id] = msg
         return
 
-    # Pas encore de ligne → essaie de poster dans salon_objectifs
+    # Aucune entrée DB → poste dans salon_objectifs
     channel = cfg_channel(guild, "salon_objectifs")
     if channel:
-        msg = await channel.send(embed=embed)
+        msg = await channel.send(embed=embed, view=view)
         db_save_objectif_embed(guild.id, channel.id, msg.id)
+        _objectif_msg_cache[guild.id] = msg
 
 
-# ─── Commandes objectifs ────────────────────────────────────────
+# ─── Commande principale !objectif ──────────────────────────────────────────
+
+@bot.command(name="objectif")
+async def objectif_cmd(ctx):
+    """
+    Affiche ou recrée l'embed interactif des objectifs du serveur.
+    Staff uniquement.
+    """
+    if not is_staff(ctx.author):
+        await ctx.send("❌ Réservé au staff.", delete_after=5)
+        return
+
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    row = db_get_objectif_embed(ctx.guild.id)
+
+    # Si un embed existe déjà, on le signale et on propose de le recréer
+    if row:
+        channel = ctx.guild.get_channel(row["channel_id"])
+        if channel:
+            try:
+                existing = await channel.fetch_message(row["msg_id"])
+                await ctx.send(
+                    f"✅ L'embed objectifs existe déjà dans {channel.mention}.\n"
+                    f"Lien : {existing.jump_url}",
+                    delete_after=10
+                )
+                return
+            except discord.NotFound:
+                pass  # Message supprimé → on le recrée
+
+    # Choisit le salon cible
+    channel = cfg_channel(ctx.guild, "salon_objectifs") or ctx.channel
+    embed   = build_objectifs_embed(ctx.guild.id)
+    view    = ObjectifView(ctx.guild.id)
+    msg     = await channel.send(embed=embed, view=view)
+    db_save_objectif_embed(ctx.guild.id, channel.id, msg.id)
+    _objectif_msg_cache[ctx.guild.id] = msg
+
+    if channel.id != ctx.channel.id:
+        await ctx.send(f"✅ Embed objectifs posté dans {channel.mention} !", delete_after=8)
+
+
+# ─── Commandes textuelles conservées (compatibilité) ────────────────────────
 
 @bot.command(name="addobjectif")
 async def addobjectif_cmd(ctx, *, texte: str = None):
@@ -836,7 +1179,11 @@ async def suppobjectif_cmd(ctx, obj_id: int = None):
         await ctx.send("❌ `!suppobjectif <id>`", delete_after=6); return
     ok = db_del_objectif(ctx.guild.id, obj_id)
     if not ok:
-        await ctx.send(f"❌ Objectif `#{obj_id}` introuvable.", delete_after=6); return
+        await ctx.send(embed=discord.Embed(
+            title="❌ Objectif introuvable",
+            description=f"L'objectif `#{obj_id}` n'existe pas.",
+            color=0xE74C3C
+        ), delete_after=6); return
     await ctx.send(embed=discord.Embed(
         title="✅ Objectif supprimé",
         description=f"Objectif `#{obj_id}` supprimé.",
@@ -853,7 +1200,11 @@ async def done_cmd(ctx, obj_id: int = None):
         await ctx.send("❌ `!done <id>`", delete_after=6); return
     ok = db_done_objectif(ctx.guild.id, obj_id)
     if not ok:
-        await ctx.send(f"❌ Objectif `#{obj_id}` introuvable ou déjà terminé.", delete_after=6); return
+        await ctx.send(embed=discord.Embed(
+            title="❌ Objectif introuvable",
+            description=f"L'objectif `#{obj_id}` n'existe pas ou est déjà terminé.",
+            color=0xE74C3C
+        ), delete_after=6); return
     await ctx.send(embed=discord.Embed(
         title="✅ Objectif terminé",
         description=f"Objectif `#{obj_id}` marqué comme terminé ✅",
@@ -862,16 +1213,230 @@ async def done_cmd(ctx, obj_id: int = None):
     await refresh_objectifs_embed(ctx.guild)
 
 # ═══════════════════════════════════════════════════════════════
-#  RECHERCHE INTELLIGENTE (fuzzy)
+#  INVITATIONS
+# ═══════════════════════════════════════════════════════════════
+
+def db_add_invitation(guild_id: int, inviter_id: int, invitee_id: int, invitee_name: str):
+    """Enregistre une invitation dans la base de données."""
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO invitations (guild_id, inviter_id, invitee_id, invitee_name, joined_at) "
+            "VALUES (?,?,?,?,?)",
+            (guild_id, inviter_id, invitee_id, invitee_name, time.time())
+        )
+
+
+def db_get_invitations(guild_id: int, inviter_id: int) -> list[sqlite3.Row]:
+    """Retourne toutes les invitations d'un inviteur pour un serveur."""
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT * FROM invitations WHERE guild_id=? AND inviter_id=? ORDER BY joined_at DESC",
+            (guild_id, inviter_id)
+        ).fetchall()
+
+
+def db_get_all_inviters(guild_id: int) -> list[sqlite3.Row]:
+    """Retourne tous les inviteurs avec leur nombre d'invitations."""
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT inviter_id, COUNT(*) as total FROM invitations WHERE guild_id=? "
+            "GROUP BY inviter_id ORDER BY total DESC",
+            (guild_id,)
+        ).fetchall()
+
+
+def fuzzy_member_search(terme: str, guild: discord.Guild, seuil: float = 0.45) -> list[discord.Member]:
+    """
+    Recherche un membre par :
+    1. Correspondance exacte (display_name ou username)
+    2. Sous-chaîne (insensible à la casse)
+    3. Similarité orthographique (difflib)
+    """
+    terme_lower = terme.lower().strip()
+    exact, substr, fuzzy_res = [], [], []
+
+    for member in guild.members:
+        if member.bot:
+            continue
+        dn = member.display_name.lower()
+        un = member.name.lower()
+
+        if terme_lower in (dn, un):
+            exact.append(member)
+            continue
+
+        if terme_lower in dn or terme_lower in un:
+            substr.append(member)
+            continue
+
+        score = max(
+            difflib.SequenceMatcher(None, terme_lower, dn).ratio(),
+            difflib.SequenceMatcher(None, terme_lower, un).ratio()
+        )
+        if score >= seuil:
+            fuzzy_res.append((member, score))
+
+    fuzzy_res.sort(key=lambda x: x[1], reverse=True)
+    return exact + substr + [m for m, _ in fuzzy_res]
+
+
+@bot.command(name="invite")
+async def invite_cmd(ctx, *, joueur: str = None):
+    """
+    !invite [joueur] — Affiche les invitations d'un joueur.
+    Recherche intelligente : pseudo exact, partiel ou approximatif.
+    """
+    if joueur is None:
+        await ctx.send(
+            embed=discord.Embed(
+                title="❌ Argument manquant",
+                description="Utilisation : `!invite [pseudo]`\nExemple : `!invite ferr`",
+                color=0xE74C3C
+            ),
+            delete_after=8
+        )
+        return
+
+    # Recherche du membre
+    candidats = fuzzy_member_search(joueur, ctx.guild)
+
+    if not candidats:
+        await ctx.send(
+            embed=discord.Embed(
+                title="❌ Joueur introuvable",
+                description=f"Aucun membre correspondant à **{joueur}** trouvé sur ce serveur.",
+                color=0xE74C3C
+            ),
+            delete_after=10
+        )
+        return
+
+    # Si plusieurs résultats, propose les plus proches
+    if len(candidats) > 1:
+        top = candidats[:5]
+        noms = "\n".join(
+            f"`{i+1}.` **{m.display_name}** (`{m.name}`)"
+            for i, m in enumerate(top)
+        )
+        choix_embed = discord.Embed(
+            title=f"🔍 Plusieurs résultats pour « {joueur} »",
+            description=(
+                f"{noms}\n\n"
+                "Réponds avec le **numéro** du joueur souhaité.\n"
+                "*(30 secondes — `annuler` pour quitter)*"
+            ),
+            color=0x3498DB,
+            timestamp=now_utc()
+        )
+        choix_msg = await ctx.send(embed=choix_embed)
+
+        def chk(m: discord.Message) -> bool:
+            return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id
+
+        try:
+            resp = await bot.wait_for("message", check=chk, timeout=30)
+        except asyncio.TimeoutError:
+            try: await choix_msg.delete()
+            except Exception: pass
+            await ctx.send("⏰ Temps écoulé.", delete_after=5)
+            return
+
+        try: await resp.delete()
+        except Exception: pass
+        try: await choix_msg.delete()
+        except Exception: pass
+
+        if resp.content.strip().lower() == "annuler":
+            await ctx.send("❌ Recherche annulée.", delete_after=5)
+            return
+
+        try:
+            idx = int(resp.content.strip()) - 1
+            if not 0 <= idx < len(top):
+                raise ValueError
+            cible = top[idx]
+        except (ValueError, IndexError):
+            await ctx.send(
+                embed=discord.Embed(
+                    title="❌ Choix invalide",
+                    description="Numéro hors plage.",
+                    color=0xE74C3C
+                ),
+                delete_after=6
+            )
+            return
+    else:
+        cible = candidats[0]
+
+    # Récupère les invitations depuis la DB
+    invitations = db_get_invitations(ctx.guild.id, cible.id)
+
+    embed = discord.Embed(
+        title=f"📨 Invitations de {cible.display_name}",
+        color=cible.color if cible.color != discord.Color.default() else 0x9B59B6,
+        timestamp=now_utc()
+    )
+    embed.set_thumbnail(url=cible.display_avatar.url)
+    embed.add_field(name="📊 Nombre total", value=str(len(invitations)), inline=True)
+
+    if not invitations:
+        embed.description = f"❌ **{cible.display_name}** n'a invité personne sur ce serveur."
+    else:
+        # Liste des invités (nom + date)
+        lignes = []
+        for inv in invitations:
+            dt   = datetime.fromtimestamp(inv["joined_at"], tz=timezone.utc)
+            date = discord.utils.format_dt(dt, style="d")
+            lignes.append(f"• **{inv['invitee_name']}** — {date}")
+
+        # Découpe si trop long (max ~1000 chars par field)
+        chunk, chunks = "", []
+        for l in lignes:
+            if len(chunk) + len(l) + 1 > 950:
+                chunks.append(chunk)
+                chunk = l
+            else:
+                chunk = (chunk + "\n" + l).strip()
+        if chunk:
+            chunks.append(chunk)
+
+        for i, c in enumerate(chunks):
+            embed.add_field(
+                name="👥 Membres invités" if i == 0 else "\u200b",
+                value=c,
+                inline=False
+            )
+
+    embed.set_footer(text=f"Recherche : « {joueur} »")
+    await ctx.send(embed=embed)
+
+
+# ─── Suivi automatique des invitations via on_member_join ───────────────────
+# On utilise le cache d'invitations Discord pour détecter qui a invité qui.
+
+_invite_cache: dict[int, dict[str, int]] = {}  # guild_id -> {code: uses}
+
+
+async def _update_invite_cache(guild: discord.Guild):
+    """Met à jour le cache des invitations pour un serveur."""
+    try:
+        invites = await guild.invites()
+        _invite_cache[guild.id] = {inv.code: inv.uses for inv in invites}
+    except Exception:
+        pass
+
+
+@bot.event
+async def on_ready_invite_cache():
+    """Initialise le cache d'invitations au démarrage (appelé dans on_ready)."""
+    for guild in bot.guilds:
+        await _update_invite_cache(guild)
+
+# ═══════════════════════════════════════════════════════════════
+#  RECHERCHE INTELLIGENTE (fuzzy) — catalogue
 # ═══════════════════════════════════════════════════════════════
 
 def fuzzy_search(terme: str, items: dict, seuil: float = 0.5) -> dict:
-    """
-    Recherche multi-méthodes :
-    1. Correspondance exacte
-    2. Mot contenu (sous-chaîne)
-    3. Similarité orthographique (difflib)
-    """
     terme_lower = terme.lower().strip()
     resultats   = {}
 
@@ -879,17 +1444,14 @@ def fuzzy_search(terme: str, items: dict, seuil: float = 0.5) -> dict:
         nom_lower = item["nom"].lower()
         key_lower = key.lower()
 
-        # 1. Exacte
         if terme_lower == nom_lower or terme_lower == key_lower:
             resultats[key] = (item, 1.0)
             continue
 
-        # 2. Sous-chaîne
         if terme_lower in nom_lower or terme_lower in key_lower:
             resultats[key] = (item, 0.9)
             continue
 
-        # 3. Fuzzy
         score = max(
             difflib.SequenceMatcher(None, terme_lower, nom_lower).ratio(),
             difflib.SequenceMatcher(None, terme_lower, key_lower).ratio()
@@ -897,7 +1459,6 @@ def fuzzy_search(terme: str, items: dict, seuil: float = 0.5) -> dict:
         if score >= seuil:
             resultats[key] = (item, score)
 
-    # Trier par score décroissant
     return dict(sorted(resultats.items(), key=lambda x: x[1][1], reverse=True))
 
 # ═══════════════════════════════════════════════════════════════
@@ -905,14 +1466,6 @@ def fuzzy_search(terme: str, items: dict, seuil: float = 0.5) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 async def _auto_delete_in_marche(message: discord.Message):
-    """
-    Dans les salons catalogue ET commandes, supprime TOUS les messages après 1s,
-    y compris ceux du bot — sauf l'embed principal du catalogue et celui des commandes.
-
-    IMPORTANT : la vérification des IDs protégés se fait APRÈS le sleep d'1s,
-    pour que les commandes comme !commande aient le temps d'enregistrer leur msg_id
-    avant qu'on décide de supprimer ou non.
-    """
     if not message.guild:
         return
 
@@ -926,11 +1479,8 @@ async def _auto_delete_in_marche(message: discord.Message):
     if not (in_cat or in_cmd):
         return
 
-    # Attendre 1 seconde AVANT de vérifier les IDs protégés
-    # (laisse le temps à !commande / !catalogue de sauvegarder leur msg_id)
     await asyncio.sleep(1)
 
-    # Relire les IDs protégés APRÈS le sleep
     data      = load_catalogue(message.guild.id)
     protected = {
         data.get("msg_id"),
@@ -941,7 +1491,7 @@ async def _auto_delete_in_marche(message: discord.Message):
     protected.discard(None)
 
     if message.id in protected:
-        return  # Embed principal → ne jamais supprimer
+        return
 
     try:
         await message.delete()
@@ -953,8 +1503,6 @@ async def _auto_delete_in_marche(message: discord.Message):
 # ═══════════════════════════════════════════════════════════════
 
 class _GestionConfirmView(discord.ui.View):
-    """Boutons de confirmation quand un article existe déjà."""
-
     def __init__(self, author_id: int):
         super().__init__(timeout=60)
         self.author_id = author_id
@@ -978,7 +1526,6 @@ class _GestionConfirmView(discord.ui.View):
 
 @bot.command(name="gestion")
 async def gestion_cmd(ctx):
-    """Interface interactive de gestion du stock (étapes guidées)."""
     if not is_vendeur(ctx.author):
         await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5)
         return
@@ -1011,14 +1558,12 @@ async def gestion_cmd(ctx):
             await ctx.send("⏰ Temps écoulé. Gestion annulée.", delete_after=6)
             return None
 
-    # ── Étape 1 : Nom
     resp_nom = await ask("📦 Étape 1/3 — Nom de l'objet",
                          "Quel est le **nom** de l'article à ajouter/modifier ?")
     if not resp_nom:
         return
     nom = resp_nom.content.strip()
 
-    # ── Étape 2 : Quantité
     resp_qty = await ask("📦 Étape 2/3 — Quantité",
                          f"Quelle **quantité** pour **{nom}** ?")
     if not resp_qty:
@@ -1031,30 +1576,25 @@ async def gestion_cmd(ctx):
         await ctx.send("❌ Quantité invalide.", delete_after=6)
         return
 
-    # ── Étape 3 : Prix
     resp_prix = await ask("📦 Étape 3/3 — Prix",
                           f"Quel est le **prix unitaire** pour **{nom}** ?")
     if not resp_prix:
         return
     prix = resp_prix.content.strip()
 
-    # ── Vérification existence (FIX 5+7 : par clé vendeur-spécifique)
     data    = load_catalogue(ctx.guild.id)
     items   = data.get("items", {})
-    my_key  = _item_key(nom, ctx.author.id)  # clé unique pour CE vendeur
+    my_key  = _item_key(nom, ctx.author.id)
     nom_low = nom.lower().strip()
 
-    # Cherche un article du même nom par un AUTRE vendeur (pour l'info)
     existant_autre = next(
         (v for k, v in items.items()
          if k.split(":")[0] == nom_low and v.get("vendeur_id") != ctx.author.id),
         None
     )
-    # Cherche mon propre article
     existant = items.get(my_key)
 
     if existant_autre and not existant:
-        # Un autre vendeur a cet article → affiche une info mais ne bloque pas
         vendeur_existant = ctx.guild.get_member(existant_autre["vendeur_id"])
         vendeur_nom      = vendeur_existant.display_name if vendeur_existant else f"<@{existant_autre['vendeur_id']}>"
         date_ajout       = ""
@@ -1089,7 +1629,6 @@ async def gestion_cmd(ctx):
             return
 
     if existant:
-        # FIX 7 : même vendeur + même nom → additionner qty, garder prix le plus bas
         ancien_prix_num  = _parse_prix_num(existant["prix"])
         nouveau_prix_num = _parse_prix_num(prix)
         items[my_key]["quantite"] += qty
@@ -1473,23 +2012,20 @@ async def say_cmd(ctx, channel: discord.TextChannel = None, *, message: str = No
         await ctx.send(f"❌ Je n'ai pas la permission d'envoyer dans {channel.mention}.", delete_after=6)
 
 # ═══════════════════════════════════════════════════════════════
-#  EVENTS — on_message (anti-lien, anti-spam, XP, auto-delete commandes)
+#  EVENTS — on_message / on_member_join
 # ═══════════════════════════════════════════════════════════════
 
 @bot.event
 async def on_message(message: discord.Message):
-    # FIX 2 : les messages du bot dans catalogue/commandes sont aussi supprimés
-    # (sauf les embeds protégés — géré dans _auto_delete_in_marche)
     if not message.guild:
         if not message.author.bot:
             await bot.process_commands(message)
         return
 
-    # Toujours planifier la suppression automatique (valide pour bot ET humain)
     asyncio.create_task(_auto_delete_in_marche(message))
 
     if message.author.bot:
-        return  # Pas de traitement anti-spam/anti-lien pour les bots
+        return
 
     member = message.author
     cfg    = load_config(message.guild.id)
@@ -1659,6 +2195,29 @@ async def _check_raid(guild: discord.Guild, cfg: dict):
 @bot.event
 async def on_member_join(member: discord.Member):
     cfg = load_config(member.guild.id)
+
+    # ── Détection de l'inviteur via comparaison du cache ──
+    try:
+        new_invites = await member.guild.invites()
+        new_cache   = {inv.code: inv.uses for inv in new_invites}
+        old_cache   = _invite_cache.get(member.guild.id, {})
+
+        inviter_id = None
+        for inv in new_invites:
+            old_uses = old_cache.get(inv.code, 0)
+            if inv.uses > old_uses and inv.inviter:
+                inviter_id = inv.inviter.id
+                db_add_invitation(
+                    guild_id     = member.guild.id,
+                    inviter_id   = inv.inviter.id,
+                    invitee_id   = member.id,
+                    invitee_name = member.display_name
+                )
+                break
+
+        _invite_cache[member.guild.id] = new_cache
+    except Exception as e:
+        print(f"[INVITE] Erreur détection inviteur : {e}")
 
     visitor_role = cfg_role(member.guild, "role_visiteur")
     if visitor_role:
@@ -2455,7 +3014,6 @@ async def classement_cmd(ctx):
 # ═══════════════════════════════════════════════════════════════
 
 class _PrixAlertView(discord.ui.View):
-    """FIX 6 : Confirmation quand un item existe déjà moins cher chez un autre vendeur."""
     def __init__(self, author_id: int):
         super().__init__(timeout=60)
         self.author_id = author_id
@@ -2474,7 +3032,6 @@ class _PrixAlertView(discord.ui.View):
 
 
 def _parse_prix_num(prix: str) -> float | None:
-    """Extrait la première valeur numérique d'un prix textuel."""
     nums = re.findall(r"[\d]+(?:[.,][\d]+)?", prix)
     if nums:
         try:
@@ -2486,11 +3043,6 @@ def _parse_prix_num(prix: str) -> float | None:
 
 @bot.command(name="catalogue")
 async def catalogue_cmd(ctx, *, args: str = None):
-    """
-    Syntaxe : !catalogue <nom composé possible> <quantité> <prix>
-    Exemple : !catalogue paladium ingot 10 500$
-    Le nom peut contenir des espaces. La quantité est le dernier entier avant le prix.
-    """
     if not is_vendeur(ctx.author):
         await ctx.send(embed=discord.Embed(
             title="❌ Permission insuffisante",
@@ -2503,14 +3055,11 @@ async def catalogue_cmd(ctx, *, args: str = None):
         await ctx.send("❌ `!catalogue <nom> <quantité> <prix>`\nExemple : `!catalogue paladium ingot 10 500$`", delete_after=10)
         return
 
-    # ── Parsing noms composés ──
-    # On split et on cherche le dernier token entier (= quantité), ce qui précède = nom, ce qui suit = prix
     tokens = args.split()
     if len(tokens) < 3:
         await ctx.send("❌ `!catalogue <nom> <quantité> <prix>`\nExemple : `!catalogue épée légendaire 5 1000$`", delete_after=10)
         return
 
-    # Cherche le dernier token qui est un entier pur → c'est la quantité
     qty_idx = None
     for i in range(len(tokens) - 1, 0, -1):
         if tokens[i].isdigit():
@@ -2534,15 +3083,13 @@ async def catalogue_cmd(ctx, *, args: str = None):
     data    = load_catalogue(ctx.guild.id)
     items   = data.get("items", {})
     nom_low = nom.lower().strip()
-    my_key  = _item_key(nom, ctx.author.id)   # clé unique = nom_lower:vendeur_id
+    my_key  = _item_key(nom, ctx.author.id)
 
-    # ── Chercher les entrées du MÊME nom par d'AUTRES vendeurs ──
     autres = {
         k: v for k, v in items.items()
         if k.split(":")[0] == nom_low and v.get("vendeur_id") != ctx.author.id
     }
 
-    # ── Alerte si un autre vendeur est moins cher ──
     prix_num = _parse_prix_num(prix)
     if autres and prix_num is not None:
         prix_min_item = min(autres.values(), key=lambda v: (_parse_prix_num(v["prix"]) or float("inf")))
@@ -2573,7 +3120,6 @@ async def catalogue_cmd(ctx, *, args: str = None):
                 ), delete_after=5)
                 return
 
-    # ── Même vendeur + même nom → fusionner au prix le plus bas ──
     if my_key in items:
         ancien_prix_num  = _parse_prix_num(items[my_key]["prix"])
         nouveau_prix_num = prix_num
@@ -2612,10 +3158,6 @@ async def catalogue_cmd(ctx, *, args: str = None):
 
 @bot.command(name="cataloguesupp")
 async def cataloguesupp_cmd(ctx):
-    """
-    Vendeur certifié → liste ses propres items, choisit lequel supprimer.
-    Staff → liste tous les items avec propriétaire, choisit lequel supprimer.
-    """
     if not is_vendeur(ctx.author):
         await ctx.send(embed=discord.Embed(
             title="❌ Permission insuffisante",
@@ -2626,15 +3168,11 @@ async def cataloguesupp_cmd(ctx):
 
     data  = load_catalogue(ctx.guild.id)
     items = data.get("items", {})
-
     staff = is_staff(ctx.author)
 
-    # ── Filtrage selon le rôle ──
     if staff:
-        # Staff voit tout le catalogue
         items_visibles = items
     else:
-        # Vendeur ne voit que ses propres items
         items_visibles = {k: v for k, v in items.items() if v.get("vendeur_id") == ctx.author.id}
 
     if not items_visibles:
@@ -2645,7 +3183,6 @@ async def cataloguesupp_cmd(ctx):
         ), delete_after=8)
         return
 
-    # ── Construction de l'embed liste ──
     embed = discord.Embed(
         title="🗑️ Suppression d'article — Choisir",
         color=0xE74C3C,
@@ -2663,7 +3200,6 @@ async def cataloguesupp_cmd(ctx):
         else:
             lignes.append(f"`{i}.` 🔹 **{item['nom']}** — 📦 {item['quantite']} · 💰 {item['prix']}")
 
-    # Discord limite les fields à 1024 chars — on coupe si besoin
     chunk, chunks = "", []
     for l in lignes:
         if len(chunk) + len(l) + 1 > 1000:
@@ -2677,10 +3213,9 @@ async def cataloguesupp_cmd(ctx):
     for idx, c in enumerate(chunks):
         embed.add_field(name="\u200b" if idx > 0 else "📋 Articles disponibles", value=c, inline=False)
 
-    embed.set_footer(text="Réponds avec le numéro ou le nom exact de l'article à supprimer · 'annuler' pour quitter · 60s")
+    embed.set_footer(text="Réponds avec le numéro ou le nom exact · 'annuler' pour quitter · 60s")
     msg_list = await ctx.send(embed=embed)
 
-    # ── Attente de la réponse ──
     def chk(m):
         return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id
 
@@ -2711,16 +3246,13 @@ async def cataloguesupp_cmd(ctx):
         ), delete_after=5)
         return
 
-    # ── Résolution : numéro ou nom ──
     target_key = None
 
-    # Essai par numéro
     if contenu.isdigit():
         idx = int(contenu) - 1
         if 0 <= idx < len(keys_list):
             target_key = keys_list[idx]
 
-    # Essai par nom exact (insensible à la casse)
     if target_key is None:
         contenu_low = contenu.lower()
         for k, v in items_visibles.items():
@@ -2736,7 +3268,6 @@ async def cataloguesupp_cmd(ctx):
         ), delete_after=8)
         return
 
-    # ── Vérification des droits ──
     item_cible = items.get(target_key)
     if not item_cible:
         await ctx.send(embed=discord.Embed(
@@ -2746,7 +3277,6 @@ async def cataloguesupp_cmd(ctx):
         ), delete_after=8)
         return
 
-    # Un vendeur non-staff ne peut supprimer que ses propres articles
     if not staff and item_cible.get("vendeur_id") != ctx.author.id:
         await ctx.send(embed=discord.Embed(
             title="❌ Permission insuffisante",
@@ -2775,7 +3305,6 @@ async def cataloguesupp_cmd(ctx):
 
 
 class _SuppAllView(discord.ui.View):
-    """Confirmation avant suppression totale du catalogue."""
     def __init__(self, author_id: int):
         super().__init__(timeout=30)
         self.author_id = author_id
@@ -2803,7 +3332,6 @@ class _SuppAllView(discord.ui.View):
 
 @bot.command(name="cataloguesuppall")
 async def cataloguesuppall_cmd(ctx):
-    """Staff uniquement — vide entièrement le catalogue avec confirmation."""
     if not is_staff(ctx.author):
         await ctx.send(embed=discord.Embed(
             title="❌ Permission insuffisante",
@@ -2828,8 +3356,7 @@ async def cataloguesuppall_cmd(ctx):
         title="⚠️ Suppression totale du catalogue",
         description=(
             f"Tu es sur le point de supprimer **{nb} article(s)** du catalogue.\n\n"
-            f"**Cette action est irréversible.**\n\n"
-            f"Confirmes-tu ?"
+            f"**Cette action est irréversible.**\n\nConfirmes-tu ?"
         ),
         color=0xE74C3C,
         timestamp=now_utc()
@@ -2849,7 +3376,6 @@ async def cataloguesuppall_cmd(ctx):
         ), delete_after=5)
         return
 
-    # ── Suppression totale ──
     data["items"] = {}
     save_catalogue(ctx.guild.id, data)
     await update_catalogue_message(ctx.guild, {})
@@ -2910,8 +3436,6 @@ async def recherche_cmd(ctx, *, terme: str = None):
 
     data     = load_catalogue(ctx.guild.id)
     items    = data.get("items", {})
-
-    # Utilise la recherche intelligente (fuzzy)
     resultats_raw = fuzzy_search(terme, items)
     resultats     = {k: v for k, (v, score) in resultats_raw.items()}
 
@@ -2940,7 +3464,7 @@ async def recherche_cmd(ctx, *, terme: str = None):
         await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════════════
-#  SYSTÈME DE COMMANDE — refonte embed + recherche
+#  SYSTÈME DE COMMANDE
 # ═══════════════════════════════════════════════════════════════
 
 class CommandeSelect(discord.ui.Select):
@@ -2949,7 +3473,7 @@ class CommandeSelect(discord.ui.Select):
         options = []
         for key, item in items.items():
             if item.get("quantite", 0) <= 0:
-                continue  # FIX 9 : pas d'articles fantômes dans le select
+                continue
             options.append(discord.SelectOption(
                 label=f"{item['nom'][:20]} ({item['prix'][:15]})"[:25],
                 value=key,
@@ -3019,7 +3543,6 @@ class CommandeSelect(discord.ui.Select):
                 await interaction.followup.send("❌ Quantité invalide.", ephemeral=True)
                 return
 
-            # Re-lire le catalogue (peut avoir changé)
             data  = load_catalogue(gid)
             items = data.get("items", {})
             item  = items.get(nom_key)
@@ -3117,14 +3640,9 @@ class CommandeRechercheModal(discord.ui.Modal, title="🔍 Rechercher un article
 
 
 class CommandeView(discord.ui.View):
-    """
-    FIX 3 : Toujours synchronisé avec le catalogue.
-    FIX : Pas de bouton refresh manuel — le refresh est automatique.
-    """
     def __init__(self, guild_id: int, items: dict):
         super().__init__(timeout=None)
         self.guild_id = guild_id
-        # Filtre les articles fantômes avant de construire le select
         live_items = _clean_ghost_items(items)
         self.add_item(CommandeSelect(guild_id, live_items))
 
@@ -3134,7 +3652,6 @@ class CommandeView(discord.ui.View):
 
 
 def _build_commande_embed_from_items(guild: discord.Guild, items: dict) -> discord.Embed:
-    """Construit l'embed commandes à partir des items déjà chargés (évite double lecture)."""
     embed = discord.Embed(
         title="🛒 Boutique — Passer une commande",
         color=0x9B59B6,
@@ -3173,7 +3690,6 @@ def _build_commande_embed_from_items(guild: discord.Guild, items: dict) -> disco
 
 
 def _build_commande_embed(guild: discord.Guild) -> discord.Embed:
-    """Version qui relit le catalogue depuis le disque."""
     data  = load_catalogue(guild.id)
     items = data.get("items", {})
     return _build_commande_embed_from_items(guild, items)
@@ -3181,7 +3697,6 @@ def _build_commande_embed(guild: discord.Guild) -> discord.Embed:
 
 @bot.command(name="commande")
 async def commande_cmd(ctx):
-    """Pose l'embed commandes persistant dans le salon commandes."""
     if not is_staff(ctx.author):
         await ctx.send("❌ Réservé au staff.", delete_after=5); return
     data  = load_catalogue(ctx.guild.id)
@@ -3189,7 +3704,6 @@ async def commande_cmd(ctx):
     embed = _build_commande_embed_from_items(ctx.guild, items)
     view  = CommandeView(ctx.guild.id, items)
     msg   = await ctx.send(embed=embed, view=view)
-    # Sauvegarde l'ID de l'embed commandes pour le refresh automatique
     _commande_msg_ids[ctx.guild.id] = msg.id
     data["commande_msg_id"] = msg.id
     save_catalogue(ctx.guild.id, data)
@@ -3242,11 +3756,9 @@ class VenduView(discord.ui.View):
             if items[self.nom_key]["quantite"] <= 0:
                 del items[self.nom_key]
                 await send_notif(guild, f"📭 **{nom_affiche}** épuisé et retiré du catalogue.")
-            # FIX 9 : nettoyage des articles fantômes
             items = _clean_ghost_items(items)
             data["items"] = items
             save_catalogue(self.guild_id, data)
-            # FIX 3 : synchronisation catalogue + commandes
             await update_catalogue_message(guild, items)
 
         await _log_vente(guild=guild, acheteur_id=acheteur_id, vendeur=interaction.user,
@@ -3287,12 +3799,6 @@ class VenduView(discord.ui.View):
 
 @bot.command(name="vendu")
 async def vendu_cmd(ctx):
-    """
-    Utilisable UNIQUEMENT dans un ticket market (topic commence par 'commande|').
-    Autorisé : vendeurs certifiés ET staff.
-    Refusé : tout autre membre → embed rouge.
-    """
-    # ── Vérification : bon salon (ticket market) ──
     topic = getattr(ctx.channel, "topic", None) or ""
     if not topic.startswith("commande|"):
         await ctx.send(embed=discord.Embed(
@@ -3302,7 +3808,6 @@ async def vendu_cmd(ctx):
         ), delete_after=6)
         return
 
-    # ── Vérification des permissions : vendeur certifié OU staff ──
     if not is_vendeur(ctx.author):
         await ctx.send(embed=discord.Embed(
             title="❌ Vous n'avez pas la permission d'utiliser cette commande",
@@ -3311,7 +3816,6 @@ async def vendu_cmd(ctx):
         ), delete_after=8)
         return
 
-    # ── Parsing du topic ──
     parts = topic.split("|")
     if len(parts) < 4:
         await ctx.send(embed=discord.Embed(
@@ -3321,8 +3825,6 @@ async def vendu_cmd(ctx):
         ), delete_after=6)
         return
 
-    # Format : commande|nom_key|quantite|vendeur_id
-    # nom_key peut contenir des ':' → on reconstitue
     _, *nom_parts, quantite_str, vendeur_id_str = parts
     nom_key = "|".join(nom_parts)
 
@@ -3453,7 +3955,7 @@ async def pub_cmd(ctx):
     await ctx.send(texte)
 
 # ═══════════════════════════════════════════════════════════════
-#  SETUP / CONFIG — panneau interactif
+#  SETUP / CONFIG
 # ═══════════════════════════════════════════════════════════════
 
 SETUP_TIMEOUT = 300
@@ -3709,8 +4211,8 @@ async def _flux_salons(ctx):
         ("salon_notifications", "🔔 Salon notifications",     "Alertes quand un article est ajouté au marché"),
         ("salon_ventes_log",    "💸 Salon logs des ventes",   "Historique des ventes confirmées"),
         ("salon_role_toggle",   "🎭 Salon rôles",             "Bouton pour activer les notifications marché"),
-        ("salon_objectifs",     "🎯 Salon objectifs",         "Embed persistant des objectifs de la faction"),  # NOUVEAU
-        ("salon_gestion",       "📦 Salon gestion stock",     "Salon dédié à la gestion du stock via !gestion"), # NOUVEAU
+        ("salon_objectifs",     "🎯 Salon objectifs",         "Embed persistant des objectifs de la faction"),
+        ("salon_gestion",       "📦 Salon gestion stock",     "Salon dédié à la gestion du stock via !gestion"),
     ]
 
     info = await ctx.send(embed=embed_setup(
@@ -4024,7 +4526,7 @@ async def _flux_voir_config(ctx):
     embed = discord.Embed(title="📋 Configuration actuelle", color=0x9B59B6, timestamp=now_utc())
     salon_keys  = ["salon_logs","salon_bienvenue","salon_roster","salon_catalogue",
                    "salon_commandes","salon_notifications","salon_ventes_log","salon_role_toggle",
-                   "salon_objectifs","salon_gestion"]  # NOUVEAU
+                   "salon_objectifs","salon_gestion"]
     role_keys   = ["role_staff","role_officier","role_leader","role_visiteur",
                    "role_recruteur","role_vendeur","role_acheteur_notif"]
     param_keys  = ["alt_min_days","spam_limit","raid_threshold","antilink_enabled"]
@@ -4135,8 +4637,8 @@ CONFIG_GROUPS = {
         ("salon_ventes_log",    "💸 Logs des ventes",             False),
         ("salon_recherche",     "🔍 Recherche articles",          False),
         ("salon_cmds_allowed",  "✅ Salons commandes (liste)",    True),
-        ("salon_objectifs",     "🎯 Salon objectifs",             False),   # NOUVEAU
-        ("salon_gestion",       "📦 Salon gestion stock",         False),   # NOUVEAU
+        ("salon_objectifs",     "🎯 Salon objectifs",             False),
+        ("salon_gestion",       "📦 Salon gestion stock",         False),
     ],
     "🎭 Rôles": [
         ("role_staff",          "👑 Staff / Admin (liste)",       True),
@@ -4288,467 +4790,4 @@ class _HomeView(discord.ui.View):
 
 
 class _KeySelect(discord.ui.Select):
-    def __init__(self, author_id: int, group: str, orig_msg: discord.Message):
-        self.author_id = author_id
-        self.group     = group
-        self.orig_msg  = orig_msg
-        options = [
-            discord.SelectOption(label=label[:50], value=key, description=f"clé : {key}")
-            for key, label, _ in CONFIG_GROUPS[group]
-        ]
-        super().__init__(placeholder="🔑 Choisir la clé à modifier…", options=options[:25], custom_id="cfg_key_sel")
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
-
-        key      = self.values[0]
-        label    = next((lbl for k, lbl, _ in CONFIG_GROUPS[self.group] if k == key), key)
-        is_list  = key in _LIST_KEYS
-        is_num   = key in _NUM_KEYS
-        is_salon = "salon" in key or "categorie" in key
-        is_role  = "role" in key
-
-        if is_list and is_salon:
-            action = (
-                "➕ Ajouter un salon : `+nom-du-salon`\n"
-                "➖ Retirer un salon : `-nom-du-salon`\n"
-                "🔄 Remplacer tout : `salon1, salon2`"
-            )
-        elif is_list and is_role:
-            action = (
-                "➕ Ajouter un rôle : `+NomDuRole`\n"
-                "➖ Retirer un rôle : `-NomDuRole`\n"
-                "🔄 Remplacer tout : `Role1, Role2`"
-            )
-        elif is_list:
-            action = "➕ `+valeur` · ➖ `-valeur` · 🔄 `val1, val2`"
-        elif is_num:
-            action = "Tapez un **nombre entier** (ex: `30`)"
-        elif is_salon:
-            action = "Tapez le **nom exact** du salon ou mentionnez-le avec `#`\nEx : `logs-modération` ou `#logs`"
-        elif is_role:
-            action = "Tapez le **nom exact** du rôle ou mentionnez-le avec `@`\nEx : `Leader` ou `@Leader`"
-        else:
-            action = "Tapez la nouvelle valeur"
-
-        cfg = load_config(interaction.guild.id)
-        cur = _fmt_cfg_val(interaction.guild, key, cfg.get(key, "—"))
-
-        embed = discord.Embed(
-            title=f"✏️ Modifier : {label}",
-            description=(
-                f"**Clé :** `{key}`\n"
-                f"**Valeur actuelle :** {cur}\n\n"
-                f"{action}\n\n"
-                f"💬 Répondez dans ce salon **(60 secondes)**.\n"
-                f"Tapez `annuler` pour abandonner."
-            ),
-            color=0x3498DB,
-            timestamp=now_utc()
-        )
-        embed.set_footer(text="⏱️ 60 secondes pour répondre")
-        await interaction.response.edit_message(embed=embed, view=None)
-
-        guild = interaction.guild
-        def chk(m: discord.Message) -> bool:
-            return m.author.id == self.author_id and m.channel.id == interaction.channel.id
-
-        try:
-            msg = await bot.wait_for("message", check=chk, timeout=60)
-        except asyncio.TimeoutError:
-            await interaction.followup.send("⏰ Temps écoulé.", ephemeral=True)
-            embed = _build_group_embed(guild, self.group)
-            view  = _GroupView(self.author_id, self.group, self.orig_msg)
-            await self.orig_msg.edit(embed=embed, view=view)
-            return
-
-        try: await msg.delete()
-        except Exception: pass
-
-        valeur = msg.content.strip()
-        if valeur.lower() == "annuler":
-            await interaction.followup.send("❌ Modification annulée.", ephemeral=True)
-            embed = _build_group_embed(guild, self.group)
-            view  = _GroupView(self.author_id, self.group, self.orig_msg)
-            await self.orig_msg.edit(embed=embed, view=view)
-            return
-
-        cfg = load_config(guild.id)
-
-        if is_num:
-            try:
-                cfg[key] = float(valeur) if "." in valeur else int(valeur)
-            except ValueError:
-                await interaction.followup.send(f"❌ `{key}` attend un nombre.", ephemeral=True)
-                embed = _build_group_embed(guild, self.group)
-                view  = _GroupView(self.author_id, self.group, self.orig_msg)
-                await self.orig_msg.edit(embed=embed, view=view)
-                return
-        elif is_list:
-            current = cfg.get(key, [])
-            if isinstance(current, str):
-                current = [current]
-            if valeur.startswith("+"):
-                to_add = valeur[1:].strip()
-                if to_add and to_add not in current:
-                    current.append(to_add)
-                cfg[key] = current
-            elif valeur.startswith("-"):
-                to_rm    = valeur[1:].strip().lower()
-                cfg[key] = [x for x in current if str(x).lower() != to_rm]
-            else:
-                cfg[key] = [v.strip() for v in valeur.split(",") if v.strip()]
-        else:
-            clean = re.sub(r"[<#@&>]", "", valeur).strip()
-            cfg[key] = clean
-
-        save_config(guild.id, cfg)
-
-        val_saved   = cfg[key]
-        val_display = (", ".join(f"`{v}`" for v in val_saved)
-                       if isinstance(val_saved, list) else f"`{val_saved}`")
-        await interaction.followup.send(
-            embed=discord.Embed(
-                title="✅ Mis à jour !",
-                description=f"**{label}**\n`{key}` → {val_display}",
-                color=0x2ECC71,
-                timestamp=now_utc()
-            ),
-            ephemeral=True
-        )
-        embed = _build_group_embed(guild, self.group)
-        view  = _GroupView(self.author_id, self.group, self.orig_msg)
-        await self.orig_msg.edit(embed=embed, view=view)
-
-
-class _GroupView(discord.ui.View):
-    def __init__(self, author_id: int, group: str, orig_msg: discord.Message):
-        super().__init__(timeout=300)
-        self.author_id = author_id
-        self.group     = group
-        self.orig_msg  = orig_msg
-        self.add_item(_KeySelect(author_id, group, orig_msg))
-
-    async def on_timeout(self):
-        try:
-            for item in self.children:
-                item.disabled = True
-            await self.orig_msg.edit(view=self)
-        except Exception:
-            pass
-
-    @discord.ui.button(label="⬅️ Retour", style=discord.ButtonStyle.grey, row=1)
-    async def retour(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
-        embed = _build_home_embed(interaction.guild)
-        view  = _HomeView(self.author_id, interaction.message)
-        await interaction.response.edit_message(embed=embed, view=view)
-
-    @discord.ui.button(label="❌ Fermer", style=discord.ButtonStyle.red, row=1)
-    async def fermer(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ Ce menu ne t'appartient pas.", ephemeral=True); return
-        self.stop()
-        try: await interaction.message.delete()
-        except Exception: pass
-        await interaction.response.send_message("👋 Configuration fermée.", ephemeral=True)
-
-
-@bot.command(name="config")
-async def config_cmd(ctx):
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Réservé aux administrateurs.", delete_after=5); return
-    try: await ctx.message.delete()
-    except Exception: pass
-    embed = _build_home_embed(ctx.guild)
-    view  = _HomeView(ctx.author.id)
-    msg   = await ctx.send(embed=embed, view=view)
-    view.msg = msg
-
-# ═══════════════════════════════════════════════════════════════
-#  AIDE
-# ═══════════════════════════════════════════════════════════════
-
-bot.remove_command("help")
-
-
-@bot.command(name="help", aliases=["aide", "commandes"])
-async def help_cmd(ctx):
-    staff = is_staff(ctx.author)
-    embed = discord.Embed(
-        title="📖 Aide — Bot",
-        description="Toutes les commandes disponibles.\n*(🔒 = Staff | 🏷️ = Vendeur certifié)*",
-        color=0x9B59B6
-    )
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n👤 Général",
-        value="`!info [@membre]` · `!level [@membre]` · `!classement` · `!pub` 🔒 · `!help`",
-        inline=False
-    )
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🎯 Objectifs 🔒",
-        value=(
-            "`!addobjectif <texte>` — Ajouter un objectif\n"
-            "`!suppobjectif <id>` — Supprimer un objectif\n"
-            "`!done <id>` / `!fait <id>` — Marquer comme terminé"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🎫 Tickets",
-        value="`!ticket` 🔒 — Panneau tickets\n`!fermer` — Fermer un ticket",
-        inline=False
-    )
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🏪 Marché",
-        value=(
-            "`!recherche [item]` — Chercher un article (recherche intelligente)\n"
-            "`!catalogue <nom> <qté> <prix>` 🏷️ — Ajouter/MAJ article (noms composés supportés)\n"
-            "`!cataloguesupp` 🏷️ — Supprimer un de ses articles (liste interactive)\n"
-            "`!cataloguesuppall` 🔒 — Vider entièrement le catalogue\n"
-            "`!stock [@membre]` 🏷️ — Voir son stock\n"
-            "`!gestion` 🏷️ — Gestion interactive du stock\n"
-            "`!commande` 🔒 — Menu de commande interactif\n"
-            "`!vendu` 🏷️ — Confirmer/annuler une vente (dans ticket market)\n"
-            "`!role` 🔒 — Bouton toggle notifications"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🎯 Mini-jeux",
-        value=(
-            "**Pendu** : `!pendu` · `!devine [lettre]` · `!mot [mot]` · `!pendustop` 🔒\n"
-            "**Morpion** : `!morpion @joueur` · `!morpionstop` 🔒\n"
-            "**Autres** : `!pileouface` · `!giveaway [durée] [récompense]` 🔒"
-        ),
-        inline=False
-    )
-    if staff:
-        embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━\n🔨 Modération 🔒",
-            value=(
-                "`!ban @membre [raison]` · `!kick @membre [raison]`\n"
-                "`!mute @membre` · `!unmute @membre`\n"
-                "`!effacer <n>` · `!roster` · `!say #salon message`"
-            ),
-            inline=False
-        )
-        embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━\n⚙️ Configuration 🔒 (Admin)",
-            value="`!setup` · `!config` · `!setconfig [clé] [valeur]`",
-            inline=False
-        )
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━\n🛡️ Protections auto",
-        value=(
-            "🔗 Anti-liens · ⚡ Anti-spam · 🛡️ Anti-alt · 🚨 Anti-raid\n"
-            "🗑️ Auto-suppression dans salon commandes (non-staff, 3s)"
-        ),
-        inline=False
-    )
-    embed.set_footer(text="🔒 = Staff | 🏷️ = Vendeur certifié ou Staff")
-    await ctx.send(embed=embed)
-
-# ═══════════════════════════════════════════════════════════════
-#  ERREURS
-# ═══════════════════════════════════════════════════════════════
-
-@bot.event
-async def on_command_error(ctx: commands.Context, error):
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send(
-            "❌ Commande inconnue. Essayez `!help` pour voir les commandes disponibles.",
-            delete_after=8
-        )
-    elif isinstance(error, commands.CheckFailure):
-        pass
-    else:
-        print(f"[ERROR] {ctx.command} : {error}")
-
-# ═══════════════════════════════════════════════════════════════
-#  RESTAURATION AU DÉMARRAGE
-# ═══════════════════════════════════════════════════════════════
-
-async def _restore_all_games():
-    """Restaure les parties de jeux en cours au redémarrage."""
-    for path in GAMES_DIR.glob("*.json"):
-        try:
-            guild_id = int(path.stem)
-        except ValueError:
-            continue
-        raw = load_games_for(guild_id)
-        now = time.time()
-        for key_str, data in raw.items():
-            remaining = data.get("end_time", 0) - now
-            if remaining <= 0:
-                continue
-            if key_str.startswith("pendu_"):
-                ch_id = int(key_str.split("_", 1)[1])
-                k     = gk(guild_id, ch_id)
-                data["guessed"]    = list(data.get("guessed", []))
-                data["letter_cd"]  = {}
-                data["channel_id"] = ch_id
-                active_pendu[k] = data
-                await _start_pendu_timer(k, guild_id, remaining)
-                print(f"[RESTORE] Pendu restauré : guild={guild_id} ch={ch_id}")
-            elif key_str.startswith("morpion_"):
-                ch_id = int(key_str.split("_", 1)[1])
-                k     = gk(guild_id, ch_id)
-                active_morpion[k] = data
-                await _start_morpion_timer(k, guild_id, remaining)
-                print(f"[RESTORE] Morpion restauré : guild={guild_id} ch={ch_id}")
-
-
-async def _restore_all_catalogues():
-    """Restaure les IDs de messages du catalogue ET des commandes au redémarrage."""
-    for path in CATALOGUE_DIR.glob("*.json"):
-        try:
-            guild_id = int(path.stem)
-            data     = load_catalogue(guild_id)
-            if data.get("msg_id"):
-                _catalogue_msg_ids[guild_id] = data["msg_id"]
-                print(f"[CATALOGUE] msg_id restauré : guild={guild_id} → {data['msg_id']}")
-            if data.get("commande_msg_id"):
-                _commande_msg_ids[guild_id] = data["commande_msg_id"]
-                print(f"[COMMANDE]  commande_msg_id restauré : guild={guild_id} → {data['commande_msg_id']}")
-        except Exception:
-            pass
-
-
-# ─── FIX 1 : Refresh automatique catalogue + commandes toutes les 3s ──────────
-_auto_refresh_running = False
-
-async def _auto_refresh_loop():
-    """
-    Tâche de fond : met à jour catalogue + commandes toutes les 3 secondes.
-    Ne tourne qu'une seule instance (guard _auto_refresh_running).
-    Utilise le lock par guild pour ne pas entrer en conflit avec les interactions.
-    """
-    global _auto_refresh_running
-    if _auto_refresh_running:
-        return
-    _auto_refresh_running = True
-    print("[REFRESH] Boucle auto-refresh démarrée (3s)")
-    try:
-        while True:
-            await asyncio.sleep(3)
-            for guild in bot.guilds:
-                try:
-                    data  = load_catalogue(guild.id)
-                    items = _clean_ghost_items(data.get("items", {}))
-                    # Mise à jour silencieuse — ignore si aucun embed n'existe encore
-                    await _silent_refresh(guild, items)
-                except Exception as e:
-                    print(f"[REFRESH] Erreur guild={guild.id} : {e}")
-    finally:
-        _auto_refresh_running = False
-
-
-async def _silent_refresh(guild: discord.Guild, items: dict):
-    """
-    Refresh léger : édite uniquement les embeds déjà existants.
-    N'en crée pas de nouveaux (évite le spam au démarrage).
-    Utilise le lock guild pour éviter les conflits.
-    """
-    async with _get_catalogue_lock(guild.id):
-        data = load_catalogue(guild.id)
-
-        # ── Catalogue embed ──
-        cat_msg_id = data.get("msg_id") or _catalogue_msg_ids.get(guild.id)
-        if cat_msg_id:
-            cat_ch = cfg_channel(guild, "salon_catalogue")
-            if cat_ch:
-                try:
-                    msg = await cat_ch.fetch_message(cat_msg_id)
-                    await msg.edit(embed=build_catalogue_embed(items))
-                except discord.NotFound:
-                    # Message supprimé → on oublie l'ID
-                    _catalogue_msg_ids.pop(guild.id, None)
-                    data.pop("msg_id", None)
-                    save_catalogue(guild.id, data)
-                except Exception:
-                    pass
-
-        # ── Commandes embed ── (FIX 3 : synchronisation immédiate)
-        cmd_msg_id = data.get("commande_msg_id") or _commande_msg_ids.get(guild.id)
-        if cmd_msg_id:
-            cmd_ch = cfg_channel(guild, "salon_commandes")
-            if cmd_ch:
-                try:
-                    cmd_msg = await cmd_ch.fetch_message(cmd_msg_id)
-                    await cmd_msg.edit(
-                        embed=_build_commande_embed_from_items(guild, items),
-                        view=CommandeView(guild.id, items)
-                    )
-                except discord.NotFound:
-                    _commande_msg_ids.pop(guild.id, None)
-                    data.pop("commande_msg_id", None)
-                    save_catalogue(guild.id, data)
-                except Exception:
-                    pass
-
-
-async def _restore_all_objectifs():
-    """
-    Restaure les embeds persistants d'objectifs au redémarrage.
-    Pour chaque serveur ayant une entrée dans objectif_embeds, tente d'éditer le message.
-    """
-    with get_db() as conn:
-        rows = conn.execute("SELECT guild_id, channel_id, msg_id FROM objectif_embeds").fetchall()
-    for row in rows:
-        guild = bot.get_guild(row["guild_id"])
-        if not guild:
-            continue
-        channel = guild.get_channel(row["channel_id"])
-        if not channel:
-            continue
-        embed = build_objectifs_embed(row["guild_id"])
-        try:
-            msg = await channel.fetch_message(row["msg_id"])
-            await msg.edit(embed=embed)
-            print(f"[OBJECTIFS] Embed restauré : guild={row['guild_id']}")
-        except Exception:
-            # Message introuvable → recrée
-            try:
-                msg = await channel.send(embed=embed)
-                db_save_objectif_embed(row["guild_id"], channel.id, msg.id)
-                print(f"[OBJECTIFS] Embed recréé : guild={row['guild_id']}")
-            except Exception as e:
-                print(f"[OBJECTIFS] Impossible de restaurer : {e}")
-
-# ═══════════════════════════════════════════════════════════════
-#  ON READY
-# ═══════════════════════════════════════════════════════════════
-
-@bot.event
-async def on_ready():
-    print(f"[BOT] Connecté : {bot.user} (ID: {bot.user.id})")
-    print(f"[BOT] Serveurs : {[g.name for g in bot.guilds]}")
-
-    # Ré-enregistre les vues persistantes
-    bot.add_view(TicketView())
-    bot.add_view(RoleToggleView())
-
-    # Restaure les états persistants
-    await _restore_all_games()
-    await _restore_all_catalogues()
-    await _restore_all_objectifs()   # NOUVEAU
-
-    # Charge/crée les configs de chaque serveur
-    for guild in bot.guilds:
-        load_config(guild.id)
-        print(f"[CONFIG] Serveur configuré : {guild.name} (ID: {guild.id})")
-
-    # FIX 1 : Démarre la boucle de refresh automatique catalogue/commandes (3s)
-    asyncio.create_task(_auto_refresh_loop())
-
-    print("[BOT] Prêt !")
-
-# ═══════════════════════════════════════════════════════════════
-#  LANCEMENT
-# ═══════════════════════════════════════════════════════════════
-
-TOKEN = os.environ.get("DISCORD_TOKEN")
-bot.run(TOKEN)
+    def __init__(self, author_id: int, group: str, orig_msg: discord.
