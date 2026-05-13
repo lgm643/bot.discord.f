@@ -58,9 +58,18 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS objectif_embeds (
-                guild_id INTEGER PRIMARY KEY,
+                guild_id   INTEGER PRIMARY KEY,
                 channel_id INTEGER,
                 msg_id     INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS invitations (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id     INTEGER NOT NULL,
+                inviter_id   INTEGER NOT NULL,
+                invited_id   INTEGER NOT NULL,
+                invited_name TEXT    NOT NULL,
+                joined_at    REAL    NOT NULL
             );
         """)
 
@@ -316,7 +325,11 @@ EXEMPT_COMMANDS = {
     "giveaway", "gw",
     "pub", "say", "dit", "fermer", "stock", "recherche",
     "help", "aide", "commandes", "info", "setup",
-    "addobjectif", "suppobjectif", "done", "fait", "gestion",
+    "gestion",
+    # objectif → embed interactif, accessible partout
+    "objectif",
+    # invite → accessible partout
+    "invite",
     # vendu → utilisé dans les tickets commandes (pas filtré par salon)
     "vendu",
     # cataloguesuppall → staff seulement, pas filtré par salon
@@ -761,8 +774,46 @@ def db_save_objectif_embed(guild_id: int, channel_id: int, msg_id: int):
         )
 
 
+# ─── Invitations ────────────────────────────────────────────────
+
+def db_add_invitation(guild_id: int, inviter_id: int, invited_id: int, invited_name: str):
+    """Enregistre une invitation (évite les doublons par invited_id)."""
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM invitations WHERE guild_id=? AND inviter_id=? AND invited_id=?",
+            (guild_id, inviter_id, invited_id)
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO invitations (guild_id, inviter_id, invited_id, invited_name, joined_at) VALUES (?,?,?,?,?)",
+                (guild_id, inviter_id, invited_id, invited_name, time.time())
+            )
+
+
+def db_get_invitations(guild_id: int, inviter_id: int) -> list[sqlite3.Row]:
+    """Retourne tous les membres invités par un utilisateur."""
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT * FROM invitations WHERE guild_id=? AND inviter_id=? ORDER BY joined_at",
+            (guild_id, inviter_id)
+        ).fetchall()
+
+
+def db_get_all_inviters(guild_id: int) -> list[sqlite3.Row]:
+    """Retourne tous les inviters distincts avec leur nombre d'invitations."""
+    with get_db() as conn:
+        return conn.execute(
+            """SELECT inviter_id, COUNT(*) as total
+               FROM invitations WHERE guild_id=?
+               GROUP BY inviter_id ORDER BY total DESC""",
+            (guild_id,)
+        ).fetchall()
+
+
+# ─── Build embed objectifs ──────────────────────────────────────
+
 def build_objectifs_embed(guild_id: int) -> discord.Embed:
-    """Construit l'embed persistant des objectifs."""
+    """Construit l'embed persistant des objectifs — design clair et moderne."""
     objectifs = db_get_objectifs(guild_id)
     embed = discord.Embed(
         title="🎯 Objectifs du serveur",
@@ -770,96 +821,443 @@ def build_objectifs_embed(guild_id: int) -> discord.Embed:
         timestamp=now_utc()
     )
     if not objectifs:
-        embed.description = "_Aucun objectif pour le moment. Utilisez `!addobjectif <texte>`_"
+        embed.description = "_Aucun objectif pour le moment._\nUtilise les boutons ci-dessous pour en ajouter."
     else:
         lignes = []
-        for obj in objectifs:
-            check = "✅" if obj["done"] else "🔲"
-            texte = f"~~{obj['texte']}~~" if obj["done"] else obj["texte"]
-            lignes.append(f"`#{obj['id']}` {check} {texte}")
+        for i, obj in enumerate(objectifs, 1):
+            statut = "✅" if obj["done"] else "⏳"
+            texte  = f"~~{obj['texte']}~~" if obj["done"] else obj["texte"]
+            lignes.append(f"{statut} **{i}.** {texte}  `#{obj['id']}`")
         embed.description = "\n".join(lignes)
-    embed.set_footer(text="!addobjectif <texte> · !suppobjectif <id> · !done <id>")
+
+    total    = len(objectifs)
+    termines = sum(1 for o in objectifs if o["done"])
+    embed.set_footer(text=f"✅ {termines}/{total} terminé(s) · Utilise les boutons pour gérer les objectifs")
     return embed
 
 
 async def refresh_objectifs_embed(guild: discord.Guild):
-    """Met à jour l'embed persistant des objectifs. Le recrée si introuvable."""
-    row = db_get_objectif_embed(guild.id)
+    """
+    Met à jour l'embed persistant ET sa vue.
+    Le recrée automatiquement si le message est introuvable.
+    """
+    row   = db_get_objectif_embed(guild.id)
     embed = build_objectifs_embed(guild.id)
+    view  = ObjectifView(guild.id)
 
     if row:
         channel = guild.get_channel(row["channel_id"])
         if channel:
             try:
                 msg = await channel.fetch_message(row["msg_id"])
-                await msg.edit(embed=embed)
+                await msg.edit(embed=embed, view=view)
                 return
             except Exception:
                 pass
-        # Message introuvable → recrée dans le même salon ou dans salon_objectifs
+        # Message introuvable → recrée
         if channel is None:
             channel = cfg_channel(guild, "salon_objectifs")
         if channel:
-            msg = await channel.send(embed=embed)
+            msg = await channel.send(embed=embed, view=view)
             db_save_objectif_embed(guild.id, channel.id, msg.id)
         return
 
-    # Pas encore de ligne → essaie de poster dans salon_objectifs
+    # Pas encore de ligne → poste dans salon_objectifs si configuré
     channel = cfg_channel(guild, "salon_objectifs")
     if channel:
-        msg = await channel.send(embed=embed)
+        msg = await channel.send(embed=embed, view=view)
         db_save_objectif_embed(guild.id, channel.id, msg.id)
 
 
-# ─── Commandes objectifs ────────────────────────────────────────
+# ─── Vue interactive Objectifs ──────────────────────────────────
 
-@bot.command(name="addobjectif")
-async def addobjectif_cmd(ctx, *, texte: str = None):
+class ObjectifView(discord.ui.View):
+    """Boutons persistants sous l'embed objectifs : Ajouter, Supprimer, Terminer."""
+
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=None)
+        self.guild_id = guild_id
+
+    # ── Ajouter ──
+    @discord.ui.button(label="➕ Ajouter", style=discord.ButtonStyle.green,
+                       custom_id="obj_ajouter")
+    async def btn_ajouter(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_staff(interaction.user):
+            await interaction.response.send_message(
+                embed=discord.Embed(title="❌ Permission refusée",
+                                    description="Réservé au staff.",
+                                    color=0xE74C3C),
+                ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(_ObjectifAddModal(self.guild_id))
+
+    # ── Supprimer ──
+    @discord.ui.button(label="🗑 Supprimer", style=discord.ButtonStyle.red,
+                       custom_id="obj_supprimer")
+    async def btn_supprimer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_staff(interaction.user):
+            await interaction.response.send_message(
+                embed=discord.Embed(title="❌ Permission refusée",
+                                    description="Réservé au staff.",
+                                    color=0xE74C3C),
+                ephemeral=True
+            )
+            return
+
+        objectifs = db_get_objectifs(self.guild_id)
+        if not objectifs:
+            await interaction.response.send_message(
+                embed=discord.Embed(title="❌ Aucun objectif",
+                                    description="Il n'y a rien à supprimer.",
+                                    color=0xE74C3C),
+                ephemeral=True
+            )
+            return
+
+        # Construit un select avec les objectifs existants
+        options = [
+            discord.SelectOption(
+                label=f"#{obj['id']} — {obj['texte'][:80]}",
+                value=str(obj["id"]),
+                emoji="✅" if obj["done"] else "⏳"
+            )
+            for obj in objectifs
+        ]
+        view = _ObjectifSuppView(self.guild_id, options)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="🗑 Supprimer un objectif",
+                description="Sélectionne l'objectif à supprimer dans le menu ci-dessous.",
+                color=0xE74C3C
+            ),
+            view=view,
+            ephemeral=True
+        )
+
+    # ── Terminer ──
+    @discord.ui.button(label="✅ Terminer", style=discord.ButtonStyle.blurple,
+                       custom_id="obj_terminer")
+    async def btn_terminer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_staff(interaction.user):
+            await interaction.response.send_message(
+                embed=discord.Embed(title="❌ Permission refusée",
+                                    description="Réservé au staff.",
+                                    color=0xE74C3C),
+                ephemeral=True
+            )
+            return
+
+        objectifs = [o for o in db_get_objectifs(self.guild_id) if not o["done"]]
+        if not objectifs:
+            await interaction.response.send_message(
+                embed=discord.Embed(title="✅ Tout est terminé !",
+                                    description="Aucun objectif en cours.",
+                                    color=0x2ECC71),
+                ephemeral=True
+            )
+            return
+
+        options = [
+            discord.SelectOption(
+                label=f"#{obj['id']} — {obj['texte'][:80]}",
+                value=str(obj["id"]),
+                emoji="⏳"
+            )
+            for obj in objectifs
+        ]
+        view = _ObjectifDoneView(self.guild_id, options)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="✅ Marquer comme terminé",
+                description="Sélectionne l'objectif à cocher.",
+                color=0x2ECC71
+            ),
+            view=view,
+            ephemeral=True
+        )
+
+
+class _ObjectifAddModal(discord.ui.Modal, title="➕ Ajouter un objectif"):
+    """Modal pour saisir le texte d'un nouvel objectif."""
+    texte = discord.ui.TextInput(
+        label="Texte de l'objectif",
+        placeholder="Ex : Farmer 100 paladiums",
+        max_length=200
+    )
+
+    def __init__(self, guild_id: int):
+        super().__init__()
+        self.guild_id = guild_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        texte  = str(self.texte).strip()
+        obj_id = db_add_objectif(self.guild_id, texte)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="✅ Objectif ajouté",
+                description=f"`#{obj_id}` — {texte}",
+                color=0x2ECC71
+            ),
+            ephemeral=True
+        )
+        guild = interaction.guild
+        await refresh_objectifs_embed(guild)
+
+
+class _ObjectifSuppSelect(discord.ui.Select):
+    def __init__(self, guild_id: int, options: list):
+        self.guild_id = guild_id
+        super().__init__(
+            placeholder="Choisir un objectif à supprimer…",
+            options=options[:25],
+            min_values=1, max_values=1
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        obj_id = int(self.values[0])
+        ok = db_del_objectif(self.guild_id, obj_id)
+        if ok:
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="✅ Objectif supprimé",
+                    description=f"L'objectif `#{obj_id}` a été supprimé.",
+                    color=0x2ECC71
+                ),
+                view=None
+            )
+            guild = interaction.guild
+            await refresh_objectifs_embed(guild)
+        else:
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="❌ Introuvable",
+                    description=f"L'objectif `#{obj_id}` est introuvable.",
+                    color=0xE74C3C
+                ),
+                view=None
+            )
+
+
+class _ObjectifSuppView(discord.ui.View):
+    def __init__(self, guild_id: int, options: list):
+        super().__init__(timeout=60)
+        self.add_item(_ObjectifSuppSelect(guild_id, options))
+
+
+class _ObjectifDoneSelect(discord.ui.Select):
+    def __init__(self, guild_id: int, options: list):
+        self.guild_id = guild_id
+        super().__init__(
+            placeholder="Choisir un objectif à terminer…",
+            options=options[:25],
+            min_values=1, max_values=1
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        obj_id = int(self.values[0])
+        ok = db_done_objectif(self.guild_id, obj_id)
+        if ok:
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="✅ Objectif terminé",
+                    description=f"L'objectif `#{obj_id}` est maintenant marqué comme terminé ✅",
+                    color=0x2ECC71
+                ),
+                view=None
+            )
+            guild = interaction.guild
+            await refresh_objectifs_embed(guild)
+        else:
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="❌ Introuvable",
+                    description=f"L'objectif `#{obj_id}` est introuvable ou déjà terminé.",
+                    color=0xE74C3C
+                ),
+                view=None
+            )
+
+
+class _ObjectifDoneView(discord.ui.View):
+    def __init__(self, guild_id: int, options: list):
+        super().__init__(timeout=60)
+        self.add_item(_ObjectifDoneSelect(guild_id, options))
+
+
+# ─── Commande !objectif ─────────────────────────────────────────
+
+@bot.command(name="objectif")
+async def objectif_cmd(ctx):
+    """
+    Affiche l'embed interactif des objectifs avec boutons ➕🗑✅.
+    Staff uniquement pour les modifications.
+    Tout le monde peut voir.
+    """
     if not is_staff(ctx.author):
-        await ctx.send("❌ Réservé au staff.", delete_after=5); return
-    if not texte:
-        await ctx.send("❌ `!addobjectif <texte>`", delete_after=6); return
-    obj_id = db_add_objectif(ctx.guild.id, texte)
-    await ctx.send(embed=discord.Embed(
-        title="✅ Objectif ajouté",
-        description=f"`#{obj_id}` — {texte}",
-        color=0x2ECC71
-    ), delete_after=8)
-    await refresh_objectifs_embed(ctx.guild)
+        await ctx.send(
+            embed=discord.Embed(
+                title="❌ Permission refusée",
+                description="Réservé au staff.",
+                color=0xE74C3C
+            ),
+            delete_after=5
+        )
+        return
+
+    embed   = build_objectifs_embed(ctx.guild.id)
+    view    = ObjectifView(ctx.guild.id)
+    msg     = await ctx.send(embed=embed, view=view)
+
+    # Sauvegarde la position de l'embed pour refresh automatique
+    db_save_objectif_embed(ctx.guild.id, ctx.channel.id, msg.id)
 
 
-@bot.command(name="suppobjectif")
-async def suppobjectif_cmd(ctx, obj_id: int = None):
-    if not is_staff(ctx.author):
-        await ctx.send("❌ Réservé au staff.", delete_after=5); return
-    if obj_id is None:
-        await ctx.send("❌ `!suppobjectif <id>`", delete_after=6); return
-    ok = db_del_objectif(ctx.guild.id, obj_id)
-    if not ok:
-        await ctx.send(f"❌ Objectif `#{obj_id}` introuvable.", delete_after=6); return
-    await ctx.send(embed=discord.Embed(
-        title="✅ Objectif supprimé",
-        description=f"Objectif `#{obj_id}` supprimé.",
-        color=0x2ECC71
-    ), delete_after=8)
-    await refresh_objectifs_embed(ctx.guild)
+# ─── Système d'invitations ──────────────────────────────────────
+
+@bot.event
+async def on_member_join_invite(member: discord.Member):
+    """
+    Détecte quel membre a invité le nouvel arrivant via l'API invitations Discord.
+    Appelé depuis on_member_join.
+    """
+    guild = member.guild
+    try:
+        invites_after = await guild.invites()
+    except Exception:
+        return
+
+    # Compare avec le cache pour trouver laquelle a été utilisée
+    cached = _invite_cache.get(guild.id, {})
+    for inv in invites_after:
+        cached_uses = cached.get(inv.code, 0)
+        if inv.uses > cached_uses and inv.inviter:
+            db_add_invitation(
+                guild_id     = guild.id,
+                inviter_id   = inv.inviter.id,
+                invited_id   = member.id,
+                invited_name = member.name
+            )
+            break
+
+    # Met à jour le cache
+    _invite_cache[guild.id] = {inv.code: inv.uses for inv in invites_after}
 
 
-@bot.command(name="done", aliases=["fait"])
-async def done_cmd(ctx, obj_id: int = None):
-    if not is_staff(ctx.author):
-        await ctx.send("❌ Réservé au staff.", delete_after=5); return
-    if obj_id is None:
-        await ctx.send("❌ `!done <id>`", delete_after=6); return
-    ok = db_done_objectif(ctx.guild.id, obj_id)
-    if not ok:
-        await ctx.send(f"❌ Objectif `#{obj_id}` introuvable ou déjà terminé.", delete_after=6); return
-    await ctx.send(embed=discord.Embed(
-        title="✅ Objectif terminé",
-        description=f"Objectif `#{obj_id}` marqué comme terminé ✅",
-        color=0x2ECC71
-    ), delete_after=8)
-    await refresh_objectifs_embed(ctx.guild)
+# Cache des invitations par guild : {guild_id: {code: uses}}
+_invite_cache: dict[int, dict[str, int]] = {}
+
+
+@bot.command(name="invite")
+async def invite_cmd(ctx, *, pseudo: str = None):
+    """
+    Affiche les invitations d'un joueur.
+    Accepte pseudo exact, partiel ou fuzzy.
+    Usage : !invite [pseudo]
+    """
+    if pseudo is None:
+        await ctx.send("❌ `!invite [pseudo]`\nExemple : `!invite Ferry`", delete_after=8)
+        return
+
+    guild      = ctx.guild
+    pseudo_low = pseudo.lower().strip()
+
+    # ── Recherche du membre : exact → partiel → fuzzy ──
+    cible: discord.Member | None = None
+
+    # 1. Exact (display_name ou username)
+    cible = discord.utils.find(
+        lambda m: m.display_name.lower() == pseudo_low or m.name.lower() == pseudo_low,
+        guild.members
+    )
+
+    # 2. Partiel (startswith)
+    if cible is None:
+        cible = discord.utils.find(
+            lambda m: m.display_name.lower().startswith(pseudo_low) or m.name.lower().startswith(pseudo_low),
+            guild.members
+        )
+
+    # 3. Fuzzy (contient)
+    if cible is None:
+        cible = discord.utils.find(
+            lambda m: pseudo_low in m.display_name.lower() or pseudo_low in m.name.lower(),
+            guild.members
+        )
+
+    # 4. Similarité difflib
+    if cible is None:
+        best_score = 0.0
+        best_member = None
+        for m in guild.members:
+            score = max(
+                difflib.SequenceMatcher(None, pseudo_low, m.display_name.lower()).ratio(),
+                difflib.SequenceMatcher(None, pseudo_low, m.name.lower()).ratio()
+            )
+            if score > best_score:
+                best_score = score
+                best_member = m
+        if best_score >= 0.5:
+            cible = best_member
+
+    if cible is None:
+        await ctx.send(
+            embed=discord.Embed(
+                title="❌ Joueur introuvable",
+                description=f"Aucun membre trouvé pour **{pseudo}**.",
+                color=0xE74C3C
+            ),
+            delete_after=8
+        )
+        return
+
+    # ── Récupère les invitations depuis la DB ──
+    invitations = db_get_invitations(guild.id, cible.id)
+
+    embed = discord.Embed(
+        title=f"📨 Invitations de {cible.display_name}",
+        color=cible.color if cible.color != discord.Color.default() else 0x3498DB,
+        timestamp=now_utc()
+    )
+    embed.set_thumbnail(url=cible.display_avatar.url)
+    embed.add_field(name="📊 Nombre total", value=str(len(invitations)), inline=True)
+
+    if not invitations:
+        embed.add_field(
+            name="❌ Aucun invité",
+            value="Ce joueur n'a invité personne pour l'instant.",
+            inline=False
+        )
+    else:
+        # Affiche la liste des personnes invitées
+        lignes = []
+        for inv in invitations:
+            # Essaie de résoudre le membre actuel
+            m = guild.get_member(inv["invited_id"])
+            nom = m.display_name if m else inv["invited_name"]
+            dt  = datetime.fromtimestamp(inv["joined_at"], tz=timezone.utc)
+            lignes.append(f"• **{nom}** — {discord.utils.format_dt(dt, style='d')}")
+
+        # Coupe si trop long pour un field (max 1024 chars)
+        chunk, chunks = "", []
+        for l in lignes:
+            if len(chunk) + len(l) + 1 > 1000:
+                chunks.append(chunk)
+                chunk = l
+            else:
+                chunk = (chunk + "\n" + l).strip()
+        if chunk:
+            chunks.append(chunk)
+
+        for idx, c in enumerate(chunks):
+            embed.add_field(
+                name="👥 Membres invités" if idx == 0 else "\u200b",
+                value=c,
+                inline=False
+            )
+
+    embed.set_footer(text=f"Demandé par {ctx.author.display_name}")
+    await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════════════
 #  RECHERCHE INTELLIGENTE (fuzzy)
@@ -1659,6 +2057,9 @@ async def _check_raid(guild: discord.Guild, cfg: dict):
 @bot.event
 async def on_member_join(member: discord.Member):
     cfg = load_config(member.guild.id)
+
+    # ── Détection de l'invitant ──
+    asyncio.create_task(on_member_join_invite(member))
 
     visitor_role = cfg_role(member.guild, "role_visiteur")
     if visitor_role:
@@ -4730,6 +5131,14 @@ async def on_ready():
     # Ré-enregistre les vues persistantes
     bot.add_view(TicketView())
     bot.add_view(RoleToggleView())
+
+    # Initialise le cache invitations pour chaque serveur
+    for guild in bot.guilds:
+        try:
+            invites = await guild.invites()
+            _invite_cache[guild.id] = {inv.code: inv.uses for inv in invites}
+        except Exception:
+            pass
 
     # Restaure les états persistants
     await _restore_all_games()
