@@ -646,17 +646,34 @@ def db_get_objectif_embed(guild_id: int):
 def db_save_objectif_embed(guild_id: int, channel_id: int, msg_id: int):
     with get_db() as conn:
         conn.execute("INSERT OR REPLACE INTO objectif_embeds (guild_id, channel_id, msg_id) VALUES (?,?,?)", (guild_id, channel_id, msg_id))
-
 # ═══════════════════════════════════════════════════════════════
-#  INVITATIONS — SQLITE + CACHE + DÉTECTION
+#  INVITATIONS — SQLITE + CACHE + DÉTECTION (version robuste)
 # ═══════════════════════════════════════════════════════════════
 
-# Cache des invitations par guild : {guild_id: {code: uses}}
-_invite_cache: dict[int, dict[str, int]] = {}
+# Cache : {guild_id: {code: {"uses": int, "inviter_id": int|None, "max_uses": int}}}
+_invite_cache: dict[int, dict[str, dict]] = {}
+_invite_locks: dict[int, asyncio.Lock]    = {}
+
+
+def _get_invite_lock(guild_id: int) -> asyncio.Lock:
+    if guild_id not in _invite_locks:
+        _invite_locks[guild_id] = asyncio.Lock()
+    return _invite_locks[guild_id]
+
+
+def _snapshot(invites: list) -> dict[str, dict]:
+    """Convertit une liste d'invitations en snapshot structuré."""
+    return {
+        inv.code: {
+            "uses":      inv.uses,
+            "inviter_id": inv.inviter.id if inv.inviter else None,
+            "max_uses":  inv.max_uses,
+        }
+        for inv in invites
+    }
 
 
 def db_add_invitation(guild_id: int, inviter_id: int, invited_id: int, invited_name: str):
-    """Enregistre une invitation — évite les doublons par invited_id."""
     with get_db() as conn:
         existing = conn.execute(
             "SELECT id FROM invitations WHERE guild_id=? AND invited_id=?",
@@ -670,7 +687,6 @@ def db_add_invitation(guild_id: int, inviter_id: int, invited_id: int, invited_n
 
 
 def db_get_invitations(guild_id: int, inviter_id: int):
-    """Retourne tous les membres invités par un utilisateur."""
     with get_db() as conn:
         return conn.execute(
             "SELECT * FROM invitations WHERE guild_id=? AND inviter_id=? ORDER BY joined_at",
@@ -689,34 +705,78 @@ def db_get_all_inviters(guild_id: int):
 async def on_member_join_invite(member: discord.Member):
     """
     Détecte quel membre a invité le nouvel arrivant.
-    Appelé avec await direct dans on_member_join (pas de create_task)
-    pour éviter toute race condition avec le cache.
+
+    Corrections apportées :
+    - Lock par guild → plus de race condition si 2 membres rejoignent en même temps
+    - Détection des invites disparues (usage unique, max_uses=1) → avant, elles
+      n'apparaissaient plus dans guild.invites() et étaient ignorées
+    - Le cache est mis à jour AVANT de relâcher le lock → pas d'état intermédiaire
     """
     guild = member.guild
-    try:
-        invites_after = await guild.invites()
-    except Exception:
-        return
+    lock  = _get_invite_lock(guild.id)
 
-    cached      = _invite_cache.get(guild.id, {})
-    used_invite = None
+    async with lock:
+        try:
+            invites_after = await guild.invites()
+        except discord.Forbidden:
+            print(f"[INVITE] Permission manquante pour lire les invitations (guild={guild.id})")
+            return
+        except Exception as e:
+            print(f"[INVITE] Erreur lors de la récupération des invitations : {e}")
+            return
 
-    for inv in invites_after:
-        if inv.uses > cached.get(inv.code, 0) and inv.inviter:
-            used_invite = inv
-            break
+        snapshot_after  = _snapshot(invites_after)
+        snapshot_before = _invite_cache.get(guild.id, {})
+        used_invite     = None
 
-    # Met à jour le cache IMMÉDIATEMENT après détection
-    _invite_cache[guild.id] = {inv.code: inv.uses for inv in invites_after}
+        # ── 1. Invite dont le compteur a augmenté (cas classique) ──────────
+        for code, after in snapshot_after.items():
+            before_uses = snapshot_before.get(code, {}).get("uses", 0)
+            if after["uses"] > before_uses:
+                used_invite = after
+                break
 
-    if used_invite and used_invite.inviter:
+        # ── 2. Invite disparue du cache → usage unique consommé ────────────
+        if used_invite is None:
+            for code, before in snapshot_before.items():
+                if code not in snapshot_after:
+                    # L'invite a disparu : soit max_uses=1 atteint, soit expirée.
+                    # On l'attribue uniquement si son max_uses était 1 (usage unique volontaire).
+                    if before.get("max_uses") == 1 and before.get("inviter_id"):
+                        used_invite = before
+                        break
+
+        # ── Mise à jour du cache (dans le lock, avant tout await externe) ──
+        _invite_cache[guild.id] = snapshot_after
+
+    # ── Enregistrement hors du lock ─────────────────────────────────────────
+    if used_invite and used_invite.get("inviter_id"):
         db_add_invitation(
             guild_id     = guild.id,
-            inviter_id   = used_invite.inviter.id,
+            inviter_id   = used_invite["inviter_id"],
             invited_id   = member.id,
-            invited_name = member.name
+            invited_name = member.name,
         )
-        print(f"[INVITE] {used_invite.inviter.name} a invité {member.name} (guild={guild.id})")
+        inviter = guild.get_member(used_invite["inviter_id"])
+        inviter_name = inviter.name if inviter else f"ID={used_invite['inviter_id']}"
+        print(f"[INVITE] {inviter_name} a invité {member.name} (guild={guild.id})")
+    else:
+        print(f"[INVITE] Impossible de détecter l'invitant pour {member.name} (guild={guild.id})")
+
+
+# ─── Initialisation du cache dans on_ready ──────────────────────────────────
+# (remplace l'ancienne initialisation dans on_ready)
+async def init_invite_cache():
+    """Charge le snapshot initial de toutes les invitations pour chaque guild."""
+    for guild in bot.guilds:
+        try:
+            invites = await guild.invites()
+            _invite_cache[guild.id] = _snapshot(invites)
+            print(f"[INVITE] Cache initialisé : {guild.name} ({len(invites)} invitation(s))")
+        except discord.Forbidden:
+            print(f"[INVITE] Permission manquante pour {guild.name} — cache non initialisé")
+        except Exception as e:
+            print(f"[INVITE] Erreur init cache {guild.name} : {e}")
 
 
 @bot.command(name="invite")
@@ -731,28 +791,23 @@ async def invite_cmd(ctx, *, pseudo: str = None):
 
     guild      = ctx.guild
     pseudo_low = pseudo.lower().strip()
+    cible      = None
 
-    # ── Recherche du membre : exact → startswith → contient → fuzzy ──
-    cible = None
-
-    # 1. Exact
+    # Exact → commence par → contient → fuzzy
     cible = discord.utils.find(
         lambda m: m.display_name.lower() == pseudo_low or m.name.lower() == pseudo_low,
         guild.members
     )
-    # 2. Commence par
     if cible is None:
         cible = discord.utils.find(
             lambda m: m.display_name.lower().startswith(pseudo_low) or m.name.lower().startswith(pseudo_low),
             guild.members
         )
-    # 3. Contient
     if cible is None:
         cible = discord.utils.find(
             lambda m: pseudo_low in m.display_name.lower() or pseudo_low in m.name.lower(),
             guild.members
         )
-    # 4. Fuzzy difflib
     if cible is None:
         best_score, best_member = 0.0, None
         for m in guild.members:
@@ -773,7 +828,6 @@ async def invite_cmd(ctx, *, pseudo: str = None):
         ), delete_after=8)
         return
 
-    # ── Récupère les invitations depuis la DB ──
     invitations = db_get_invitations(guild.id, cible.id)
     total       = len(invitations)
 
@@ -783,8 +837,6 @@ async def invite_cmd(ctx, *, pseudo: str = None):
         timestamp=now_utc()
     )
     embed.set_thumbnail(url=cible.display_avatar.url)
-
-    # ── Total bien visible en premier ──
     embed.add_field(
         name="📊 Total d'invitations",
         value=f"**{total}** membre(s) invité(s)",
@@ -825,7 +877,6 @@ async def invite_cmd(ctx, *, pseudo: str = None):
 
     embed.set_footer(text=f"✅ = encore présent · ❌ = a quitté · Demandé par {ctx.author.display_name}")
     await ctx.send(embed=embed)
-
 # ═══════════════════════════════════════════════════════════════
 #  OBJECTIFS — BUILD EMBED + VUE
 # ═══════════════════════════════════════════════════════════════
@@ -3309,7 +3360,6 @@ async def _silent_refresh(guild, items):
 # ═══════════════════════════════════════════════════════════════
 #  ON READY
 # ═══════════════════════════════════════════════════════════════
-
 @bot.event
 async def on_ready():
     print(f"[BOT] Connecté : {bot.user} (ID: {bot.user.id})")
@@ -3318,14 +3368,7 @@ async def on_ready():
     bot.add_view(TicketView())
     bot.add_view(RoleToggleView())
 
-    # Initialise le cache invitations pour chaque serveur
-    for guild in bot.guilds:
-        try:
-            invites = await guild.invites()
-            _invite_cache[guild.id] = {inv.code: inv.uses for inv in invites}
-            print(f"[INVITE] Cache initialisé : guild={guild.name} ({len(_invite_cache[guild.id])} invitations)")
-        except Exception as e:
-            print(f"[INVITE] Impossible de charger les invitations pour {guild.name} : {e}")
+    await init_invite_cache()
 
     await _restore_all_games()
     await _restore_all_catalogues()
@@ -3337,7 +3380,6 @@ async def on_ready():
 
     asyncio.create_task(_auto_refresh_loop())
     print("[BOT] Prêt !")
-
 # ═══════════════════════════════════════════════════════════════
 #  LANCEMENT
 # ═══════════════════════════════════════════════════════════════
