@@ -646,6 +646,7 @@ def db_get_objectif_embed(guild_id: int):
 def db_save_objectif_embed(guild_id: int, channel_id: int, msg_id: int):
     with get_db() as conn:
         conn.execute("INSERT OR REPLACE INTO objectif_embeds (guild_id, channel_id, msg_id) VALUES (?,?,?)", (guild_id, channel_id, msg_id))
+
 # ═══════════════════════════════════════════════════════════════
 #  INVITATIONS — SQLITE + CACHE + DÉTECTION (version robuste)
 # ═══════════════════════════════════════════════════════════════
@@ -673,17 +674,18 @@ def _snapshot(invites: list) -> dict[str, dict]:
     }
 
 
+# ── CORRECTION #9 : on supprime l'ancien enregistrement si le membre revient ──
 def db_add_invitation(guild_id: int, inviter_id: int, invited_id: int, invited_name: str):
     with get_db() as conn:
-        existing = conn.execute(
-            "SELECT id FROM invitations WHERE guild_id=? AND invited_id=?",
+        # Si le membre est revenu, on supprime l'ancienne entrée et on réenregistre
+        conn.execute(
+            "DELETE FROM invitations WHERE guild_id=? AND invited_id=?",
             (guild_id, invited_id)
-        ).fetchone()
-        if not existing:
-            conn.execute(
-                "INSERT INTO invitations (guild_id, inviter_id, invited_id, invited_name, joined_at) VALUES (?,?,?,?,?)",
-                (guild_id, inviter_id, invited_id, invited_name, time.time())
-            )
+        )
+        conn.execute(
+            "INSERT INTO invitations (guild_id, inviter_id, invited_id, invited_name, joined_at) VALUES (?,?,?,?,?)",
+            (guild_id, inviter_id, invited_id, invited_name, time.time())
+        )
 
 
 def db_get_invitations(guild_id: int, inviter_id: int):
@@ -705,67 +707,65 @@ def db_get_all_inviters(guild_id: int):
 async def on_member_join_invite(member: discord.Member):
     """
     Détecte quel membre a invité le nouvel arrivant.
-
-    Corrections apportées :
-    - Lock par guild → plus de race condition si 2 membres rejoignent en même temps
-    - Détection des invites disparues (usage unique, max_uses=1) → avant, elles
-      n'apparaissaient plus dans guild.invites() et étaient ignorées
-    - Le cache est mis à jour AVANT de relâcher le lock → pas d'état intermédiaire
+    CORRECTION #4 : toute la fonction est dans un try/except global
+    pour ne jamais bloquer on_member_join.
     """
     guild = member.guild
     lock  = _get_invite_lock(guild.id)
 
-    async with lock:
-        try:
-            invites_after = await guild.invites()
-        except discord.Forbidden:
-            print(f"[INVITE] Permission manquante pour lire les invitations (guild={guild.id})")
-            return
-        except Exception as e:
-            print(f"[INVITE] Erreur lors de la récupération des invitations : {e}")
-            return
+    try:
+        async with lock:
+            try:
+                invites_after = await guild.invites()
+            except discord.Forbidden:
+                print(f"[INVITE] Permission manquante pour lire les invitations (guild={guild.id})")
+                return
+            except Exception as e:
+                print(f"[INVITE] Erreur lors de la récupération des invitations : {e}")
+                return
 
-        snapshot_after  = _snapshot(invites_after)
-        snapshot_before = _invite_cache.get(guild.id, {})
-        used_invite     = None
+            snapshot_after  = _snapshot(invites_after)
+            snapshot_before = _invite_cache.get(guild.id, {})
+            used_invite     = None
 
-        # ── 1. Invite dont le compteur a augmenté (cas classique) ──────────
-        for code, after in snapshot_after.items():
-            before_uses = snapshot_before.get(code, {}).get("uses", 0)
-            if after["uses"] > before_uses:
-                used_invite = after
-                break
+            # ── 1. Invite dont le compteur a augmenté (cas classique) ──────────
+            for code, after in snapshot_after.items():
+                before_uses = snapshot_before.get(code, {}).get("uses", 0)
+                if after["uses"] > before_uses:
+                    used_invite = after
+                    break
 
-        # ── 2. Invite disparue du cache → usage unique consommé ────────────
-        if used_invite is None:
-            for code, before in snapshot_before.items():
-                if code not in snapshot_after:
-                    # L'invite a disparu : soit max_uses=1 atteint, soit expirée.
-                    # On l'attribue uniquement si son max_uses était 1 (usage unique volontaire).
-                    if before.get("max_uses") == 1 and before.get("inviter_id"):
-                        used_invite = before
-                        break
+            # ── 2. Invite disparue du cache → usage unique consommé ────────────
+            if used_invite is None:
+                for code, before in snapshot_before.items():
+                    if code not in snapshot_after:
+                        if before.get("max_uses") == 1 and before.get("inviter_id"):
+                            used_invite = before
+                            break
 
-        # ── Mise à jour du cache (dans le lock, avant tout await externe) ──
-        _invite_cache[guild.id] = snapshot_after
+            # ── Mise à jour du cache (dans le lock) ──
+            _invite_cache[guild.id] = snapshot_after
 
-    # ── Enregistrement hors du lock ─────────────────────────────────────────
-    if used_invite and used_invite.get("inviter_id"):
-        db_add_invitation(
-            guild_id     = guild.id,
-            inviter_id   = used_invite["inviter_id"],
-            invited_id   = member.id,
-            invited_name = member.name,
-        )
-        inviter = guild.get_member(used_invite["inviter_id"])
-        inviter_name = inviter.name if inviter else f"ID={used_invite['inviter_id']}"
-        print(f"[INVITE] {inviter_name} a invité {member.name} (guild={guild.id})")
-    else:
-        print(f"[INVITE] Impossible de détecter l'invitant pour {member.name} (guild={guild.id})")
+        # ── Enregistrement hors du lock ──────────────────────────────────────
+        if used_invite and used_invite.get("inviter_id"):
+            db_add_invitation(
+                guild_id     = guild.id,
+                inviter_id   = used_invite["inviter_id"],
+                invited_id   = member.id,
+                invited_name = member.name,
+            )
+            inviter = guild.get_member(used_invite["inviter_id"])
+            inviter_name = inviter.name if inviter else f"ID={used_invite['inviter_id']}"
+            print(f"[INVITE] {inviter_name} a invité {member.name} (guild={guild.id})")
+        else:
+            print(f"[INVITE] Impossible de détecter l'invitant pour {member.name} (guild={guild.id})")
+
+    except Exception as e:
+        # CORRECTION #4 : on attrape TOUTE exception pour ne pas bloquer on_member_join
+        print(f"[INVITE] Erreur non gérée dans on_member_join_invite pour {member.name} : {e}")
 
 
 # ─── Initialisation du cache dans on_ready ──────────────────────────────────
-# (remplace l'ancienne initialisation dans on_ready)
 async def init_invite_cache():
     """Charge le snapshot initial de toutes les invitations pour chaque guild."""
     for guild in bot.guilds:
@@ -777,6 +777,39 @@ async def init_invite_cache():
             print(f"[INVITE] Permission manquante pour {guild.name} — cache non initialisé")
         except Exception as e:
             print(f"[INVITE] Erreur init cache {guild.name} : {e}")
+
+
+# ── CORRECTION #10 : listeners pour maintenir le cache à jour en temps réel ──
+
+@bot.event
+async def on_invite_create(invite: discord.Invite):
+    """Met à jour le cache quand une invitation est créée."""
+    if not invite.guild:
+        return
+    guild_id = invite.guild.id
+    lock = _get_invite_lock(guild_id)
+    async with lock:
+        if guild_id not in _invite_cache:
+            _invite_cache[guild_id] = {}
+        _invite_cache[guild_id][invite.code] = {
+            "uses":       invite.uses or 0,
+            "inviter_id": invite.inviter.id if invite.inviter else None,
+            "max_uses":   invite.max_uses,
+        }
+    print(f"[INVITE] Nouvelle invitation créée : {invite.code} (guild={guild_id})")
+
+
+@bot.event
+async def on_invite_delete(invite: discord.Invite):
+    """Met à jour le cache quand une invitation est supprimée."""
+    if not invite.guild:
+        return
+    guild_id = invite.guild.id
+    lock = _get_invite_lock(guild_id)
+    async with lock:
+        if guild_id in _invite_cache:
+            _invite_cache[guild_id].pop(invite.code, None)
+    print(f"[INVITE] Invitation supprimée : {invite.code} (guild={guild_id})")
 
 
 @bot.command(name="invite")
@@ -877,6 +910,7 @@ async def invite_cmd(ctx, *, pseudo: str = None):
 
     embed.set_footer(text=f"✅ = encore présent · ❌ = a quitté · Demandé par {ctx.author.display_name}")
     await ctx.send(embed=embed)
+
 # ═══════════════════════════════════════════════════════════════
 #  OBJECTIFS — BUILD EMBED + VUE
 # ═══════════════════════════════════════════════════════════════
@@ -1604,18 +1638,38 @@ async def _check_raid(guild, cfg):
             await log_channel.send(content=f"🚨 **RAID POSSIBLE !** {mentions}", embed=embed)
 
 
+# ═══════════════════════════════════════════════════════════════
+#  ON_MEMBER_JOIN — CORRIGÉ (#3 #4)
+#  Chaque bloc est isolé dans son propre try/except :
+#  une erreur dans les invitations ne bloque plus le rôle ni le BVN
+# ═══════════════════════════════════════════════════════════════
+
 @bot.event
 async def on_member_join(member: discord.Member):
     cfg = load_config(member.guild.id)
 
-    # ── Détection de l'invitant — await direct pour éviter la race condition ──
-    await on_member_join_invite(member)
+    # ── Détection de l'invitant — isolé pour ne jamais bloquer la suite ──
+    try:
+        await on_member_join_invite(member)
+    except Exception as e:
+        print(f"[INVITE] Erreur critique non gérée pour {member.name} : {e}")
 
+    # ── Rôle visiteur ──────────────────────────────────────────────────────
     visitor_role = cfg_role(member.guild, "role_visiteur")
     if visitor_role:
-        try: await member.add_roles(visitor_role, reason="Rôle visiteur automatique")
-        except Exception as e: print(f"[WELCOME] Erreur rôle visiteur : {e}")
+        try:
+            await member.add_roles(visitor_role, reason="Rôle visiteur automatique")
+            print(f"[WELCOME] Rôle visiteur attribué à {member.name}")
+        except discord.Forbidden:
+            print(f"[WELCOME] Permission manquante pour attribuer le rôle visiteur à {member.name}")
+        except Exception as e:
+            print(f"[WELCOME] Erreur rôle visiteur pour {member.name} : {e}")
+    else:
+        # CORRECTION #3 : log si le rôle est introuvable
+        role_name = cfg.get("role_visiteur", "visiteur")
+        print(f"[WELCOME] ⚠️ Rôle visiteur '{role_name}' introuvable sur {member.guild.name} — vérifie !config")
 
+    # ── Message de bienvenue ───────────────────────────────────────────────
     welcome_channel = cfg_channel(member.guild, "salon_bienvenue")
     if welcome_channel:
         try:
@@ -1624,21 +1678,37 @@ async def on_member_join(member: discord.Member):
                 f"Bienvenue sur le Discord de **{member.guild.name}** 👑\n"
                 f"N'hésite pas à ouvrir un ticket si tu as une question. On est là 🙌"
             )
-        except Exception as e: print(f"[WELCOME] Erreur envoi bienvenue : {e}")
+            print(f"[WELCOME] Message de bienvenue envoyé pour {member.name}")
+        except discord.Forbidden:
+            print(f"[WELCOME] Permission manquante pour envoyer dans le salon bienvenue")
+        except Exception as e:
+            print(f"[WELCOME] Erreur message bienvenue pour {member.name} : {e}")
+    else:
+        # CORRECTION #3 : log si le salon est introuvable
+        salon_name = cfg.get("salon_bienvenue", "bienvenue")
+        print(f"[WELCOME] ⚠️ Salon bienvenue '{salon_name}' introuvable sur {member.guild.name} — vérifie !config")
 
-    age_days = (datetime.now(timezone.utc) - member.created_at).days
-    embed = discord.Embed(title="📥 Membre arrivé", color=0x2ECC71, timestamp=now_utc())
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.add_field(name="👤 Membre",      value=f"{member} ({member.id})", inline=True)
-    embed.add_field(name="📅 Compte créé", value=discord.utils.format_dt(member.created_at, style="D"), inline=True)
-    embed.add_field(name="⏱️ Âge",         value=f"{age_days} jour(s)", inline=True)
-    embed.add_field(name="👥 Total",       value=str(member.guild.member_count), inline=True)
-    await send_log(member.guild, embed)
+    # ── Log d'arrivée ──────────────────────────────────────────────────────
+    try:
+        age_days = (datetime.now(timezone.utc) - member.created_at).days
+        embed = discord.Embed(title="📥 Membre arrivé", color=0x2ECC71, timestamp=now_utc())
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="👤 Membre",      value=f"{member} ({member.id})", inline=True)
+        embed.add_field(name="📅 Compte créé", value=discord.utils.format_dt(member.created_at, style="D"), inline=True)
+        embed.add_field(name="⏱️ Âge",         value=f"{age_days} jour(s)", inline=True)
+        embed.add_field(name="👥 Total",       value=str(member.guild.member_count), inline=True)
+        await send_log(member.guild, embed)
+    except Exception as e:
+        print(f"[WELCOME] Erreur log arrivée pour {member.name} : {e}")
 
-    reasons = _analyse_alt(member, cfg)
-    if reasons:
-        await _send_alt_alert(member, reasons)
-        await _check_raid(member.guild, cfg)
+    # ── Anti-alt / Anti-raid ───────────────────────────────────────────────
+    try:
+        reasons = _analyse_alt(member, cfg)
+        if reasons:
+            await _send_alt_alert(member, reasons)
+            await _check_raid(member.guild, cfg)
+    except Exception as e:
+        print(f"[WELCOME] Erreur anti-alt/raid pour {member.name} : {e}")
 
 
 @bot.event
@@ -3123,7 +3193,10 @@ class _KeySelect(discord.ui.Select):
             else:
                 cfg[key] = [v.strip() for v in valeur.split(",") if v.strip()]
         else:
-            cfg[key] = re.sub(r"[<#@&>]", "", valeur).strip()
+            # CORRECTION #1 : on retire uniquement les chevrons de mention (<, >, #, @, &)
+            # mais on garde le contenu brut (nom ou ID) proprement
+            cleaned = re.sub(r"[<#@&>]", "", valeur).strip()
+            cfg[key] = cleaned
 
         save_config(guild.id, cfg)
         val_saved   = cfg[key]
@@ -3358,28 +3431,42 @@ async def _silent_refresh(guild, items):
                 except Exception: pass
 
 # ═══════════════════════════════════════════════════════════════
-#  ON READY
+#  ON READY — CORRECTION #6 : guard contre les appels multiples
 # ═══════════════════════════════════════════════════════════════
+
+_on_ready_done = False
+
 @bot.event
 async def on_ready():
+    global _on_ready_done
+
     print(f"[BOT] Connecté : {bot.user} (ID: {bot.user.id})")
     print(f"[BOT] Serveurs : {[g.name for g in bot.guilds]}")
 
+    # Toujours réenregistrer les vues persistantes (nécessaire après reconnexion)
     bot.add_view(TicketView())
     bot.add_view(RoleToggleView())
 
+    # Toujours rafraîchir le cache des invitations (peut changer pendant une déconnexion)
     await init_invite_cache()
 
-    await _restore_all_games()
-    await _restore_all_catalogues()
-    await _restore_all_objectifs()
+    # Le reste ne se fait qu'une seule fois au démarrage initial
+    if not _on_ready_done:
+        _on_ready_done = True
 
-    for guild in bot.guilds:
-        load_config(guild.id)
-        print(f"[CONFIG] Serveur configuré : {guild.name} (ID: {guild.id})")
+        await _restore_all_games()
+        await _restore_all_catalogues()
+        await _restore_all_objectifs()
 
-    asyncio.create_task(_auto_refresh_loop())
-    print("[BOT] Prêt !")
+        for guild in bot.guilds:
+            load_config(guild.id)
+            print(f"[CONFIG] Serveur configuré : {guild.name} (ID: {guild.id})")
+
+        asyncio.create_task(_auto_refresh_loop())
+        print("[BOT] Prêt !")
+    else:
+        print("[BOT] Reconnexion détectée — restauration ignorée (déjà effectuée)")
+
 # ═══════════════════════════════════════════════════════════════
 #  LANCEMENT
 # ═══════════════════════════════════════════════════════════════
