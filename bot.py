@@ -716,7 +716,7 @@ async def on_member_join_invite(member: discord.Member):
     try:
         async with lock:
             await asyncio.sleep(1)
-
+             
             try:
                 invites_after = await guild.invites()
             except discord.Forbidden:
@@ -3468,7 +3468,26 @@ async def on_ready():
         print("[BOT] Prêt !")
     else:
         print("[BOT] Reconnexion détectée — restauration ignorée (déjà effectuée)")
+@bot.event
+async def on_invite_create(invite):
+    guild = invite.guild
 
+    if guild.id not in _invite_cache:
+        _invite_cache[guild.id] = {}
+
+    _invite_cache[guild.id][invite.code] = {
+        "uses": invite.uses,
+        "inviter_id": invite.inviter.id if invite.inviter else None,
+        "max_uses": invite.max_uses,
+    }
+
+
+@bot.event
+async def on_invite_delete(invite):
+    guild_cache = _invite_cache.get(invite.guild.id)
+
+    if guild_cache and invite.code in guild_cache:
+        del guild_cache[invite.code]
 # ═══════════════════════════════════════════════════════════════
 #  LANCEMENT
 # ═══════════════════════════════════════════════════════════════
