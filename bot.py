@@ -715,6 +715,8 @@ async def on_member_join_invite(member: discord.Member):
 
     try:
         async with lock:
+            await asyncio.sleep(1)
+
             try:
                 invites_after = await guild.invites()
             except discord.Forbidden:
