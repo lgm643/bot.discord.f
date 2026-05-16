@@ -63,10 +63,16 @@ def init_db():
                 guild_id     INTEGER NOT NULL,
                 inviter_id   INTEGER NOT NULL,
                 invited_id   INTEGER NOT NULL,
-                invited_name TEXT    NOT NULL,
+                invited_name TEXT    NOT NULL DEFAULT '',
                 joined_at    REAL    NOT NULL
             );
         """)
+        # Migration : ajoute invited_name si la table existait sans cette colonne
+        try:
+            conn.execute("ALTER TABLE invitations ADD COLUMN invited_name TEXT NOT NULL DEFAULT ''")
+            print("[DB] Migration : colonne invited_name ajoutée à la table invitations")
+        except Exception:
+            pass  # La colonne existe déjà, c'est normal
 
 init_db()
 
