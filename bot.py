@@ -707,23 +707,25 @@ def db_get_all_inviters(guild_id: int):
 async def on_member_join_invite(member: discord.Member):
     """
     Détecte quel membre a invité le nouvel arrivant.
-    CORRECTION #4 : toute la fonction est dans un try/except global
-    pour ne jamais bloquer on_member_join.
+    Envoie un log dans le salon logs avec le résultat.
     """
     guild = member.guild
     lock  = _get_invite_lock(guild.id)
 
     try:
         async with lock:
+            # Petit délai pour laisser Discord mettre à jour les compteurs
             await asyncio.sleep(1)
-             
+
             try:
                 invites_after = await guild.invites()
             except discord.Forbidden:
                 print(f"[INVITE] Permission manquante pour lire les invitations (guild={guild.id})")
+                await _send_invite_log(guild, member, None, erreur="Permission manquante (bot sans accès aux invitations)")
                 return
             except Exception as e:
                 print(f"[INVITE] Erreur lors de la récupération des invitations : {e}")
+                await _send_invite_log(guild, member, None, erreur=str(e))
                 return
 
             snapshot_after  = _snapshot(invites_after)
@@ -748,7 +750,7 @@ async def on_member_join_invite(member: discord.Member):
             # ── Mise à jour du cache (dans le lock) ──
             _invite_cache[guild.id] = snapshot_after
 
-        # ── Enregistrement hors du lock ──────────────────────────────────────
+        # ── Enregistrement + log hors du lock ────────────────────────────────
         if used_invite and used_invite.get("inviter_id"):
             db_add_invitation(
                 guild_id     = guild.id,
@@ -757,14 +759,54 @@ async def on_member_join_invite(member: discord.Member):
                 invited_name = member.name,
             )
             inviter = guild.get_member(used_invite["inviter_id"])
-            inviter_name = inviter.name if inviter else f"ID={used_invite['inviter_id']}"
+            inviter_name = inviter.display_name if inviter else f"ID={used_invite['inviter_id']}"
             print(f"[INVITE] {inviter_name} a invité {member.name} (guild={guild.id})")
+            await _send_invite_log(guild, member, inviter)
         else:
             print(f"[INVITE] Impossible de détecter l'invitant pour {member.name} (guild={guild.id})")
+            await _send_invite_log(guild, member, None)
 
     except Exception as e:
-        # CORRECTION #4 : on attrape TOUTE exception pour ne pas bloquer on_member_join
         print(f"[INVITE] Erreur non gérée dans on_member_join_invite pour {member.name} : {e}")
+        await _send_invite_log(guild, member, None, erreur=str(e))
+
+
+async def _send_invite_log(guild: discord.Guild, member: discord.Member, inviter, erreur: str = None):
+    """Envoie un embed dans le salon logs pour tracer qui a invité qui."""
+    log_ch = await get_log_channel(guild)
+    if not log_ch:
+        return
+    try:
+        if inviter:
+            # Récupérer le total d'invitations de cet invitant
+            total = len(db_get_invitations(guild.id, inviter.id))
+            embed = discord.Embed(
+                title="📨 Invitation détectée",
+                color=0x3498DB,
+                timestamp=now_utc()
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.add_field(name="👤 Nouveau membre", value=f"{member.mention} (`{member.name}`)", inline=True)
+            embed.add_field(name="📩 Invité par",     value=f"{inviter.mention} (`{inviter.name}`)", inline=True)
+            embed.add_field(name="📊 Total invitations", value=f"**{total}** membre(s) invité(s) par {inviter.display_name}", inline=False)
+            embed.set_footer(text=f"ID membre : {member.id} · ID invitant : {inviter.id}")
+        else:
+            embed = discord.Embed(
+                title="📨 Invitation — Invitant inconnu",
+                color=0xE67E22,
+                timestamp=now_utc()
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.add_field(name="👤 Nouveau membre", value=f"{member.mention} (`{member.name}`)", inline=False)
+            if erreur:
+                embed.add_field(name="❌ Erreur", value=f"`{erreur}`", inline=False)
+                embed.add_field(name="💡 Cause possible", value="Lien vanity, lien de DM, ou permission manquante", inline=False)
+            else:
+                embed.add_field(name="⚠️ Raison", value="Impossible de détecter l'invitant.\nLien vanity, lien de DM, ou cache désynchronisé.", inline=False)
+            embed.set_footer(text=f"ID membre : {member.id}")
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"[INVITE] Erreur envoi log invite : {e}")
 
 
 # ─── Initialisation du cache dans on_ready ──────────────────────────────────
@@ -3255,52 +3297,441 @@ async def setup_cmd(ctx):
     ), delete_after=10)
 
 # ═══════════════════════════════════════════════════════════════
-#  AIDE
+#  AIDE — menu déroulant par catégorie
 # ═══════════════════════════════════════════════════════════════
 
 bot.remove_command("help")
 
+def _help_embed_accueil(is_staff_user: bool) -> discord.Embed:
+    embed = discord.Embed(
+        title="📖 Aide — La Mystic Bot",
+        description=(
+            "Bienvenue dans l'aide du bot !\n"
+            "Utilise le **menu déroulant** ci-dessous pour naviguer entre les catégories.\n\n"
+            "**Légende :**\n"
+            "🔒 Réservé au **Staff**\n"
+            "🏷️ Réservé aux **Vendeurs certifiés** (ou Staff)\n"
+            "👤 Accessible à **tous les membres**\n\n"
+            "**Catégories disponibles :**\n"
+            "👤 Général · 📨 Invitations · 🎫 Tickets · 🏪 Marché\n"
+            "🎮 Mini-jeux · 🛡️ Protections" +
+            ("\n🔨 Modération · ⚙️ Configuration" if is_staff_user else "")
+        ),
+        color=0x9B59B6
+    )
+    embed.set_footer(text="Sélectionne une catégorie dans le menu · Timeout 5 minutes")
+    return embed
+
+
+def _help_embed_general() -> discord.Embed:
+    embed = discord.Embed(title="👤 Général", color=0x3498DB)
+    embed.add_field(
+        name="📊 `!level` · alias : `!lvl` · `!xp`",
+        value="Affiche ton niveau, ton XP, ton nombre de messages et ton temps en vocal.\n**Usage :** `!level` ou `!level @membre`",
+        inline=False
+    )
+    embed.add_field(
+        name="🏆 `!classement` · alias : `!top` · `!leaderboard`",
+        value="Affiche le top 10 des membres par messages, niveau, temps vocal et faction.",
+        inline=False
+    )
+    embed.add_field(
+        name="🔍 `!info`",
+        value="Affiche les informations détaillées d'un membre (rôles, statut, date d'arrivée, permissions…).\n**Usage :** `!info` ou `!info @membre`",
+        inline=False
+    )
+    embed.add_field(
+        name="🪙 `!pileouface` · alias : `!pof` · `!coinflip`",
+        value="Lance une pièce — Pile ou Face ? Résultat aléatoire.",
+        inline=False
+    )
+    embed.add_field(
+        name="📣 `!pub` 🔒",
+        value="Envoie le message de recrutement de la faction dans le salon actuel.",
+        inline=False
+    )
+    embed.add_field(
+        name="📖 `!help` · alias : `!aide` · `!commandes`",
+        value="Affiche ce menu d'aide interactif.",
+        inline=False
+    )
+    embed.set_footer(text="👤 = accessible à tous")
+    return embed
+
+
+def _help_embed_invitations() -> discord.Embed:
+    embed = discord.Embed(title="📨 Invitations", color=0x2ECC71)
+    embed.add_field(
+        name="📨 `!invite <pseudo>`",
+        value=(
+            "Affiche le nombre de membres invités par un joueur et la liste complète.\n"
+            "**Usage :** `!invite LGM`\n"
+            "✅ = membre encore présent · ❌ = membre parti\n"
+            "La recherche est floue : `LG` peut trouver `LGM`."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="📋 Comment fonctionne le système ?",
+        value=(
+            "Quand un membre rejoint, le bot compare les invitations avant/après pour détecter laquelle a été utilisée.\n"
+            "Un log est automatiquement envoyé dans le salon logs avec :\n"
+            "• **Pseudo a été invité par Pseudo** si détecté\n"
+            "• **Invitant inconnu** si lien vanity ou DM Discord"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="👤 = accessible à tous")
+    return embed
+
+
+def _help_embed_tickets() -> discord.Embed:
+    embed = discord.Embed(title="🎫 Tickets", color=0xE67E22)
+    embed.add_field(
+        name="🎫 `!ticket` 🔒",
+        value=(
+            "Poste le panneau de tickets dans le salon actuel avec deux boutons :\n"
+            "• **📋 Demande de recrutement** → ouvre un ticket avec formulaire complet\n"
+            "• **📩 Autre demande** → ouvre un ticket libre\n"
+            "Les tickets sont privés entre le membre, le staff et les recruteurs."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🔒 `!fermer`",
+        value=(
+            "Ferme le ticket actuel après confirmation (30 secondes).\n"
+            "Un **transcript HTML** complet est automatiquement sauvegardé dans les logs.\n"
+            "Utilisable dans n'importe quel ticket (`ticket-...`)."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🎯 `!objectif` 🔒",
+        value=(
+            "Ouvre le panneau interactif des objectifs du serveur.\n"
+            "Boutons disponibles : ➕ Ajouter · 🗑 Supprimer · ✅ Marquer terminé\n"
+            "L'embed se met à jour automatiquement."
+        ),
+        inline=False
+    )
+    embed.set_footer(text="🔒 = Staff requis pour créer · !fermer accessible à tous dans un ticket")
+    return embed
+
+
+def _help_embed_marche() -> discord.Embed:
+    embed = discord.Embed(title="🏪 Marché", color=0xF1C40F)
+    embed.add_field(
+        name="🔍 `!recherche <item>`",
+        value=(
+            "Recherche intelligente (floue) dans le catalogue.\n"
+            "**Usage :** `!recherche paladium`\n"
+            "Fonctionne même avec un nom partiel ou approximatif."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="➕ `!catalogue <nom> <quantité> <prix>` 🏷️",
+        value=(
+            "Ajoute ou met à jour un article dans le catalogue.\n"
+            "**Usage :** `!catalogue paladium ingot 10 500$`\n"
+            "Si l'article existe déjà, le stock est additionné.\n"
+            "Une alerte s'affiche si ton prix est plus élevé qu'un concurrent."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🗑️ `!cataloguesupp` 🏷️",
+        value=(
+            "Supprime un de tes articles du catalogue (ou n'importe lequel si Staff).\n"
+            "Une liste numérotée s'affiche, réponds avec le numéro ou le nom."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🗑️ `!cataloguesuppall` 🔒",
+        value="Vide entièrement le catalogue. Demande une confirmation avant suppression.",
+        inline=False
+    )
+    embed.add_field(
+        name="📦 `!stock [@membre]` 🏷️",
+        value=(
+            "Affiche les articles en vente d'un vendeur.\n"
+            "**Usage :** `!stock` (ton stock) ou `!stock @membre`\n"
+            "Dans le salon catalogue, la réponse est envoyée en DM."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="⚙️ `!gestion` 🏷️",
+        value=(
+            "Interface interactive pour gérer ton stock étape par étape.\n"
+            "Pose les questions : nom → quantité → prix.\n"
+            "Idéal pour ne pas se tromper de format."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🛒 `!commande` 🔒",
+        value="Poste l'embed de commande permanent dans le salon commandes (menu déroulant + recherche).",
+        inline=False
+    )
+    embed.add_field(
+        name="✅ `!vendu` 🏷️",
+        value=(
+            "À utiliser dans un ticket de commande market.\n"
+            "Affiche les boutons **Vendu** / **Pas vendu**.\n"
+            "• Vendu → déduit le stock, log la vente, ferme le ticket\n"
+            "• Pas vendu → ferme le ticket sans modifier le stock"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🔔 `!role` 🔒",
+        value="Poste le bouton de toggle des notifications marché dans le salon dédié.",
+        inline=False
+    )
+    embed.set_footer(text="🏷️ = Vendeur certifié ou Staff · 🔒 = Staff uniquement")
+    return embed
+
+
+def _help_embed_jeux() -> discord.Embed:
+    embed = discord.Embed(title="🎮 Mini-jeux", color=0x9B59B6)
+    embed.add_field(
+        name="🎯 Pendu",
+        value=(
+            "`!pendu` — Lance une partie (choix mot aléatoire ou personnalisé via DM)\n"
+            "`!devine <lettre>` — Propose une lettre\n"
+            "`!mot <mot>` — Tente de deviner le mot entier\n"
+            "`!pendustop` 🔒 — Arrête la partie en cours\n"
+            "Durée max : **30 minutes** · Récompense : **+150 XP** pour le gagnant"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="❌⭕ Morpion",
+        value=(
+            "`!morpion @joueur` — Lance une partie contre un autre membre\n"
+            "`!morpionstop` 🔒 — Arrête la partie en cours\n"
+            "Le perdant peut demander une **revanche**.\n"
+            "Durée max : **5 minutes** · Récompense : **+50 XP** pour le gagnant"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🪙 Pile ou Face",
+        value="`!pileouface` · alias : `!pof` · `!coinflip` — Résultat aléatoire instantané.",
+        inline=False
+    )
+    embed.add_field(
+        name="🎉 Giveaway 🔒",
+        value=(
+            "`!giveaway <durée> <récompense>` · alias : `!gw`\n"
+            "**Durées :** `10s` · `5m` · `2h` · `1j` (ou combinés : `1h30m`)\n"
+            "**Exemple :** `!giveaway 1h Pack de paladiums`\n"
+            "Les membres cliquent pour participer, le gagnant est tiré au sort à la fin."
+        ),
+        inline=False
+    )
+    embed.set_footer(text="👤 = accessible à tous sauf mentions 🔒")
+    return embed
+
+
+def _help_embed_protections() -> discord.Embed:
+    embed = discord.Embed(title="🛡️ Protections automatiques", color=0xE74C3C)
+    embed.add_field(
+        name="🔗 Anti-liens",
+        value=(
+            "Tout lien envoyé par un non-admin est automatiquement supprimé.\n"
+            "Seuls les domaines autorisés passent (par défaut : `tenor.com`, `giphy.com`).\n"
+            "Modifiable via `!config` → Sécurité → `allowed_domains`."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="⚡ Anti-spam",
+        value=(
+            "Si un membre envoie trop de messages en peu de temps :\n"
+            "1. **Avertissement** public\n"
+            "2. **Expulsion automatique** si ça recommence\n"
+            "Seuils configurables via `!config` → Sécurité."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🛡️ Anti-alt",
+        value=(
+            "À chaque arrivée, le bot vérifie :\n"
+            "• Âge du compte Discord (défaut : < 30 jours = suspect)\n"
+            "• Absence d'avatar\n"
+            "Une alerte est envoyée dans les logs si suspect."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🚨 Anti-raid",
+        value=(
+            "Si plusieurs comptes suspects rejoignent en peu de temps, une alerte raid est envoyée.\n"
+            "Seuil et fenêtre de temps configurables via `!config`."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🗑️ Auto-suppression marché",
+        value=(
+            "Dans le salon **catalogue**, tout message non protégé est supprimé automatiquement\n"
+            "pour garder l'embed du catalogue propre."
+        ),
+        inline=False
+    )
+    embed.set_footer(text="Toutes ces protections sont automatiques, aucune commande requise")
+    return embed
+
+
+def _help_embed_moderation() -> discord.Embed:
+    embed = discord.Embed(title="🔨 Modération 🔒", color=0xE74C3C)
+    embed.add_field(
+        name="🔨 `!ban @membre [raison]`",
+        value="Bannit définitivement un membre du serveur. Les messages des dernières 24h sont supprimés.",
+        inline=False
+    )
+    embed.add_field(
+        name="👢 `!kick @membre [raison]`",
+        value="Expulse un membre (il peut revenir avec une invitation).",
+        inline=False
+    )
+    embed.add_field(
+        name="🔇 `!mute @membre [raison]`",
+        value="Rend un membre muet (ne peut plus écrire ni parler). Crée le rôle Muted si absent.",
+        inline=False
+    )
+    embed.add_field(
+        name="🔊 `!unmute @membre`",
+        value="Retire le mute d'un membre.",
+        inline=False
+    )
+    embed.add_field(
+        name="🗑️ `!effacer <nombre>`",
+        value="Supprime les X derniers messages du salon (max 100).\n**Usage :** `!effacer 20`",
+        inline=False
+    )
+    embed.add_field(
+        name="📋 `!roster`",
+        value="Met à jour l'embed du roster dans le salon roster avec les membres actuels par rôle.",
+        inline=False
+    )
+    embed.add_field(
+        name="📣 `!say #salon <message>` · alias : `!dit`",
+        value=(
+            "Fait envoyer un message par le bot dans n'importe quel salon.\n"
+            "**Usage :** `!say #général Bonsoir tout le monde !`"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="🔒 = Staff uniquement")
+    return embed
+
+
+def _help_embed_config() -> discord.Embed:
+    embed = discord.Embed(title="⚙️ Configuration 🔒 (Admin)", color=0x95A5A6)
+    embed.add_field(
+        name="⚙️ `!config`",
+        value=(
+            "Ouvre le panneau de configuration interactif complet.\n"
+            "Permet de configurer tous les salons, rôles, catégories et paramètres de sécurité.\n"
+            "Interface par menus déroulants, aucune syntaxe à retenir."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🛠️ `!setup`",
+        value="Affiche un rappel pour utiliser `!config`.",
+        inline=False
+    )
+    embed.add_field(
+        name="📋 Clés configurables",
+        value=(
+            "**Salons :** logs, bienvenue, roster, catalogue, commandes, notifications, ventes…\n"
+            "**Rôles :** staff, visiteur, vendeur, recruteur, acheteur…\n"
+            "**Sécurité :** âge anti-alt, seuil anti-raid, limites anti-spam\n"
+            "**Roster :** rôles affichés dans l'embed roster"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="🔒 = Administrateur uniquement")
+    return embed
+
+
+HELP_CATEGORIES_PUBLIC = [
+    ("👤 Général",          "general"),
+    ("📨 Invitations",      "invitations"),
+    ("🎫 Tickets & Objectifs", "tickets"),
+    ("🏪 Marché",           "marche"),
+    ("🎮 Mini-jeux",        "jeux"),
+    ("🛡️ Protections",     "protections"),
+]
+HELP_CATEGORIES_STAFF = [
+    ("🔨 Modération",       "moderation"),
+    ("⚙️ Configuration",   "config"),
+]
+
+
+class HelpSelect(discord.ui.Select):
+    def __init__(self, is_staff_user: bool):
+        self.is_staff_user = is_staff_user
+        categories = HELP_CATEGORIES_PUBLIC + (HELP_CATEGORIES_STAFF if is_staff_user else [])
+        options = [
+            discord.SelectOption(label="🏠 Accueil", value="accueil", description="Page d'accueil de l'aide"),
+        ] + [
+            discord.SelectOption(label=label, value=value, description=f"Voir les commandes : {label}")
+            for label, value in categories
+        ]
+        super().__init__(
+            placeholder="📂 Choisir une catégorie…",
+            options=options,
+            custom_id="help_select"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        choice = self.values[0]
+        embed_map = {
+            "accueil":      _help_embed_accueil(self.is_staff_user),
+            "general":      _help_embed_general(),
+            "invitations":  _help_embed_invitations(),
+            "tickets":      _help_embed_tickets(),
+            "marche":       _help_embed_marche(),
+            "jeux":         _help_embed_jeux(),
+            "protections":  _help_embed_protections(),
+            "moderation":   _help_embed_moderation(),
+            "config":       _help_embed_config(),
+        }
+        embed = embed_map.get(choice, _help_embed_accueil(self.is_staff_user))
+        await interaction.response.edit_message(embed=embed, view=self.view)
+
+
+class HelpView(discord.ui.View):
+    def __init__(self, is_staff_user: bool, msg=None):
+        super().__init__(timeout=300)
+        self.msg = msg
+        self.add_item(HelpSelect(is_staff_user))
+
+    async def on_timeout(self):
+        if self.msg:
+            try:
+                for item in self.children:
+                    item.disabled = True
+                await self.msg.edit(view=self)
+            except Exception:
+                pass
+
+
 @bot.command(name="help", aliases=["aide", "commandes"])
 async def help_cmd(ctx):
     staff = is_staff(ctx.author)
-    embed = discord.Embed(
-        title="📖 Aide — Bot",
-        description="Toutes les commandes disponibles.\n*(🔒 = Staff | 🏷️ = Vendeur certifié)*",
-        color=0x9B59B6
-    )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n👤 Général",
-        value="`!info [@membre]` · `!level [@membre]` · `!classement` · `!pub` 🔒 · `!help`", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n📨 Invitations",
-        value="`!invite [pseudo]` — Voir le nombre d'invitations et les membres invités par un joueur", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🎯 Objectifs 🔒",
-        value="`!objectif` — Ouvrir le panneau interactif des objectifs (boutons ➕🗑✅)", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🎫 Tickets",
-        value="`!ticket` 🔒 — Panneau tickets\n`!fermer` — Fermer un ticket", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🏪 Marché",
-        value=("`!recherche [item]` — Chercher un article (recherche intelligente)\n"
-               "`!catalogue <nom> <qté> <prix>` 🏷️ — Ajouter/MAJ article\n"
-               "`!cataloguesupp` 🏷️ — Supprimer un de ses articles\n"
-               "`!cataloguesuppall` 🔒 — Vider entièrement le catalogue\n"
-               "`!stock [@membre]` 🏷️ — Voir son stock\n"
-               "`!gestion` 🏷️ — Gestion interactive du stock\n"
-               "`!commande` 🔒 — Menu de commande interactif\n"
-               "`!vendu` 🏷️ — Confirmer/annuler une vente (dans ticket market)\n"
-               "`!role` 🔒 — Bouton toggle notifications"), inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🎯 Mini-jeux",
-        value=("**Pendu** : `!pendu` · `!devine [lettre]` · `!mot [mot]` · `!pendustop` 🔒\n"
-               "**Morpion** : `!morpion @joueur` · `!morpionstop` 🔒\n"
-               "**Autres** : `!pileouface` · `!giveaway [durée] [récompense]` 🔒"), inline=False)
-    if staff:
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🔨 Modération 🔒",
-            value=("`!ban @membre [raison]` · `!kick @membre [raison]`\n"
-                   "`!mute @membre` · `!unmute @membre`\n"
-                   "`!effacer <n>` · `!roster` · `!say #salon message`"), inline=False)
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━\n⚙️ Configuration 🔒 (Admin)",
-            value="`!setup` · `!config`", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🛡️ Protections auto",
-        value="🔗 Anti-liens · ⚡ Anti-spam · 🛡️ Anti-alt · 🚨 Anti-raid\n🗑️ Auto-suppression dans salon commandes", inline=False)
-    embed.set_footer(text="🔒 = Staff | 🏷️ = Vendeur certifié ou Staff")
-    await ctx.send(embed=embed)
+    embed = _help_embed_accueil(staff)
+    view  = HelpView(staff)
+    msg   = await ctx.send(embed=embed, view=view)
+    view.msg = msg
 
 # ═══════════════════════════════════════════════════════════════
 #  ERREURS
@@ -3468,26 +3899,7 @@ async def on_ready():
         print("[BOT] Prêt !")
     else:
         print("[BOT] Reconnexion détectée — restauration ignorée (déjà effectuée)")
-@bot.event
-async def on_invite_create(invite):
-    guild = invite.guild
 
-    if guild.id not in _invite_cache:
-        _invite_cache[guild.id] = {}
-
-    _invite_cache[guild.id][invite.code] = {
-        "uses": invite.uses,
-        "inviter_id": invite.inviter.id if invite.inviter else None,
-        "max_uses": invite.max_uses,
-    }
-
-
-@bot.event
-async def on_invite_delete(invite):
-    guild_cache = _invite_cache.get(invite.guild.id)
-
-    if guild_cache and invite.code in guild_cache:
-        del guild_cache[invite.code]
 # ═══════════════════════════════════════════════════════════════
 #  LANCEMENT
 # ═══════════════════════════════════════════════════════════════
