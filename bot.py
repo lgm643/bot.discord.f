@@ -299,6 +299,7 @@ EXEMPT_COMMANDS = {
     "pub","say","dit","fermer","stock","recherche",
     "help","aide","commandes","info","setup",
     "gestion","objectif","invite","vendu","cataloguesuppall",
+    "vendeur","accepter","refuser",
 }
 
 
@@ -2354,18 +2355,21 @@ async def _end_giveaway(gw_id, delay, channel, reward):
 
 @bot.command(name="classement", aliases=["top", "leaderboard"])
 async def classement_cmd(ctx):
-    gid   = ctx.guild.id
-    data  = load_user_data(gid)
-    guild = ctx.guild
-    now   = time.time()
+    gid    = ctx.guild.id
+    data   = load_user_data(gid)
+    guild  = ctx.guild
+    now    = time.time()
     medals = ["🥇", "🥈", "🥉"]
-    cfg   = load_config(gid)
+    cfg    = load_config(gid)
 
     for uid_str, u in data.items():
         u["_voice_live"] = u["voice_time"] + (now - u["voice_join"]) if u.get("voice_join") else u["voice_time"]
 
     def top10_field(key, fmt):
-        items = sorted([(uid, u) for uid, u in data.items() if u.get(key, 0) > 0], key=lambda x: x[1].get(key, 0), reverse=True)[:10]
+        items = sorted(
+            [(uid, u) for uid, u in data.items() if u.get(key, 0) > 0],
+            key=lambda x: x[1].get(key, 0), reverse=True
+        )[:10]
         if not items: return "_Aucun joueur_"
         lines = []
         for i, (uid, u) in enumerate(items):
@@ -2375,31 +2379,79 @@ async def classement_cmd(ctx):
             lines.append(f"{rank} **{name}** — {fmt(u)}")
         return "\n".join(lines)
 
-    items_lvl = sorted(data.items(), key=lambda x: (x[1].get("level", 0), x[1].get("xp", 0)), reverse=True)[:10]
-    top_lvl = "\n".join(
-        f"{medals[i] if i < 3 else f'`#{i+1}`'} **{guild.get_member(int(uid)).display_name if guild.get_member(int(uid)) else 'Inconnu'}** — Niv. {u.get('level',0)} ({u.get('xp',0)} XP)"
-        for i, (uid, u) in enumerate(items_lvl)
-    ) or "_Aucun joueur_"
+    # ── Top Niveau global ──────────────────────────────────────────────────
+    items_lvl = sorted(
+        data.items(),
+        key=lambda x: (x[1].get("level", 0), x[1].get("xp", 0)),
+        reverse=True
+    )[:10]
+    top_lvl_lines = []
+    for i, (uid, u) in enumerate(items_lvl):
+        m = guild.get_member(int(uid))
+        name = m.display_name if m else "Inconnu"
+        rank = medals[i] if i < 3 else f"`#{i+1}`"
+        top_lvl_lines.append(f"{rank} **{name}** — Niv. {u.get('level', 0)} ({u.get('xp', 0)} XP)")
+    top_lvl = "\n".join(top_lvl_lines) or "_Aucun joueur_"
 
-    faction_role_names = cfg.get("faction_roles", [])
+    # ── Top Faction ────────────────────────────────────────────────────────
+    # Rôles de faction depuis la config (comparaison insensible à la casse)
+    faction_role_names_lower = {r.lower() for r in cfg.get("faction_roles", [
+        "Membre", "Recrue", "Officier", "Membre +", "Membre de confiance"
+    ])}
+
     faction_members = []
     for member in guild.members:
-        if member.bot: continue
-        if any(r.name in faction_role_names for r in member.roles):
-            uid_str = str(member.id)
-            u = data.get(uid_str, {"level": 0, "xp": 0})
-            faction_members.append((uid_str, u, member))
-    faction_members.sort(key=lambda x: (x[1].get("level", 0), x[1].get("xp", 0)), reverse=True)
-    top_faction = "\n".join(
-        f"{medals[i] if i < 3 else f'`#{i+1}`'} **{m.display_name}** — Niv. {u.get('level', 0)}"
-        for i, (uid, u, m) in enumerate(faction_members[:10])
-    ) or "_Aucun membre faction_"
+        if member.bot:
+            continue
+        # Vérifie si le membre a au moins un rôle de faction
+        member_role_names_lower = {r.name.lower() for r in member.roles}
+        if not faction_role_names_lower.intersection(member_role_names_lower):
+            continue
+        uid_str = str(member.id)
+        u = data.get(uid_str, {"level": 0, "xp": 0, "message_count": 0, "voice_time": 0.0})
+        # Récupère le rôle de faction le plus élevé (premier dans la liste config)
+        role_display = ""
+        for cfg_role_name in cfg.get("faction_roles", []):
+            if cfg_role_name.lower() in member_role_names_lower:
+                role_display = cfg_role_name
+                break
+        faction_members.append((uid_str, u, member, role_display))
+
+    # Tri par niveau décroissant, puis XP
+    faction_members.sort(
+        key=lambda x: (x[1].get("level", 0), x[1].get("xp", 0)),
+        reverse=True
+    )
+
+    if faction_members:
+        top_faction_lines = []
+        for i, (uid, u, m, role_name) in enumerate(faction_members[:10]):
+            rank = medals[i] if i < 3 else f"`#{i+1}`"
+            role_tag = f"• *{role_name}*" if role_name else ""
+            top_faction_lines.append(
+                f"{rank} **{m.display_name}** — Niv. {u.get('level', 0)} ({u.get('xp', 0)} XP) {role_tag}"
+            )
+        top_faction = "\n".join(top_faction_lines)
+    else:
+        top_faction = "_Aucun membre de faction trouvé_\n*Vérifie la config `faction_roles` avec `!config`*"
 
     embed = discord.Embed(title="🏆 Classements", color=0xF1C40F, timestamp=now_utc())
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n📊 Top Messages", value=top10_field("message_count", lambda u: f"{u['message_count']} msg"), inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n⭐ Top Niveau",   value=top_lvl,  inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n🎤 Top Vocal",    value=top10_field("_voice_live", lambda u: fmt_voice(u["_voice_live"])), inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n⚔️ Top Faction",  value=top_faction, inline=False)
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━\n📊 Top Messages",
+        value=top10_field("message_count", lambda u: f"{u['message_count']} msg"),
+        inline=False
+    )
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n⭐ Top Niveau",  value=top_lvl,     inline=False)
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━\n🎤 Top Vocal",
+        value=top10_field("_voice_live", lambda u: fmt_voice(u["_voice_live"])),
+        inline=False
+    )
+    embed.add_field(
+        name=f"━━━━━━━━━━━━━━━━━━\n⚔️ Top Faction ({len(faction_members)} membres)",
+        value=top_faction,
+        inline=False
+    )
     embed.set_footer(text="Top 10 par catégorie • Temps vocal live inclus")
     await ctx.send(embed=embed)
 
@@ -3413,6 +3465,30 @@ def _help_embed_tickets() -> discord.Embed:
         inline=False
     )
     embed.add_field(
+        name="🛒 `!vendeur` 🔒",
+        value=(
+            "Poste l'embed de candidature **Vendeur Certifié** dans le salon rôles.\n"
+            "Les membres cliquent sur **👉 Devenir vendeur certifié** → formulaire → ticket créé automatiquement."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="✅ `!accepter [raison]` 🔒",
+        value=(
+            "Dans un ticket vendeur : accepte la demande, attribue le rôle Vendeur Certifié et ferme le ticket.\n"
+            "**Usage :** `!accepter Stock suffisant et profil sérieux`"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="❌ `!refuser [raison]` 🔒",
+        value=(
+            "Dans un ticket vendeur : refuse la demande et ferme le ticket.\n"
+            "**Usage :** `!refuser Profil insuffisant pour le moment`"
+        ),
+        inline=False
+    )
+    embed.add_field(
         name="🎯 `!objectif` 🔒",
         value=(
             "Ouvre le panneau interactif des objectifs du serveur.\n"
@@ -3873,7 +3949,272 @@ async def _silent_refresh(guild, items):
 #  ON READY — CORRECTION #6 : guard contre les appels multiples
 # ═══════════════════════════════════════════════════════════════
 
-_on_ready_done = False
+# ═══════════════════════════════════════════════════════════════
+#  SYSTÈME VENDEUR CERTIFIÉ
+# ═══════════════════════════════════════════════════════════════
+
+class VendeurModal(discord.ui.Modal, title="🛒 Demande de Vendeur Certifié"):
+    pseudo = discord.ui.TextInput(
+        label="🎮 Pseudo Discord",
+        placeholder="Ton pseudo Discord exact",
+        max_length=50
+    )
+    produits = discord.ui.TextInput(
+        label="📦 Type de produits vendus",
+        placeholder="Ex : minerais, stuff PvP, ressources diverses...",
+        style=discord.TextStyle.paragraph,
+        max_length=300
+    )
+    disponibilites = discord.ui.TextInput(
+        label="⏰ Disponibilités",
+        placeholder="Matin / après-midi / soir / week-end...",
+        max_length=200
+    )
+    serieux = discord.ui.TextInput(
+        label="🤝 Sérieux & Stock",
+        placeholder="Es-tu prêt à respecter les règles ? As-tu du stock prêt ?",
+        style=discord.TextStyle.paragraph,
+        max_length=500
+    )
+    motivation = discord.ui.TextInput(
+        label="🎯 Motivation",
+        placeholder="Pourquoi veux-tu devenir vendeur certifié ?",
+        style=discord.TextStyle.paragraph,
+        max_length=500
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild       = interaction.guild
+        member      = interaction.user
+        cfg         = load_config(guild.id)
+        staff_roles = cfg_roles(guild, "role_staff")
+        category    = cfg_category(guild, "categorie_tickets")
+
+        # Créer le salon ticket privé
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member:             discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
+        }
+        for r in staff_roles:
+            overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+
+        ticket_ch = await guild.create_text_channel(
+            name=f"vendeur-{member.name[:20]}",
+            category=category,
+            overwrites=overwrites,
+            topic=f"vendeur_certifie|{member.id}"
+        )
+
+        # Embed récapitulatif dans le ticket
+        embed = discord.Embed(
+            title="🛒 Demande de Vendeur Certifié",
+            color=0xF1C40F,
+            timestamp=now_utc()
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="👤 Candidat",          value=f"{member.mention} (`{member.name}`)", inline=False)
+        embed.add_field(name="🎮 Pseudo Discord",    value=str(self.pseudo),        inline=True)
+        embed.add_field(name="⏰ Disponibilités",     value=str(self.disponibilites), inline=True)
+        embed.add_field(name="📦 Produits vendus",   value=str(self.produits),       inline=False)
+        embed.add_field(name="🤝 Sérieux & Stock",   value=str(self.serieux),        inline=False)
+        embed.add_field(name="🎯 Motivation",        value=str(self.motivation),     inline=False)
+        embed.add_field(
+            name="📌 Rappel commandes marché",
+            value=(
+                "`!gestion` / `!catalogue <nom> <qté> <prix>` → publier un article\n"
+                "`!cataloguesupp` → supprimer un article\n"
+                "`!vendu` → confirmer une vente dans un ticket\n"
+                "`!help` → toutes les commandes"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="Staff : utilisez !accepter ou !refuser pour traiter la demande · !fermer pour clore")
+
+        ping_staff = " ".join(r.mention for r in staff_roles) if staff_roles else "@Staff"
+        await ticket_ch.send(
+            content=f"{ping_staff} | {member.mention}\n📋 Nouvelle demande de **Vendeur Certifié** !",
+            embed=embed
+        )
+
+        await interaction.response.send_message(
+            f"✅ Ta demande a été envoyée ! Ticket créé : {ticket_ch.mention}",
+            ephemeral=True
+        )
+
+        # Log dans salon logs
+        await send_log(guild, discord.Embed(
+            title="🛒 Nouvelle demande Vendeur Certifié",
+            description=f"{member.mention} (`{member.name}`) a soumis une candidature.\nTicket : {ticket_ch.mention}",
+            color=0xF1C40F,
+            timestamp=now_utc()
+        ))
+
+
+class VendeurView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="👉 Devenir vendeur certifié",
+        style=discord.ButtonStyle.green,
+        custom_id="vendeur_certifie_btn"
+    )
+    async def devenir_vendeur(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Vérifie si le membre a déjà un ticket vendeur ouvert
+        existing = discord.utils.find(
+            lambda c: c.name == f"vendeur-{interaction.user.name[:20]}" and hasattr(c, "topic") and c.topic and c.topic.startswith("vendeur_certifie"),
+            interaction.guild.channels
+        )
+        if existing:
+            await interaction.response.send_message(
+                f"❌ Tu as déjà une demande en cours : {existing.mention}",
+                ephemeral=True
+            )
+            return
+        # Vérifie si le membre a déjà le rôle
+        role_vendeur = cfg_role(interaction.guild, "role_vendeur")
+        if role_vendeur and role_vendeur in interaction.user.roles:
+            await interaction.response.send_message(
+                "✅ Tu es déjà **Vendeur Certifié** !",
+                ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(VendeurModal())
+
+
+@bot.command(name="vendeur")
+async def vendeur_cmd(ctx):
+    """Poste l'embed de candidature Vendeur Certifié dans le salon role_toggle."""
+    if not is_staff(ctx.author):
+        await ctx.send("❌ Réservé au staff.", delete_after=5)
+        return
+    channel = cfg_channel(ctx.guild, "salon_role_toggle")
+    if not channel:
+        await ctx.send("❌ Salon `salon_role_toggle` introuvable. Configure-le via `!config`.", delete_after=8)
+        return
+
+    embed = discord.Embed(
+        title="🛒 Devenir Vendeur Certifié",
+        description=(
+            "Tu veux vendre tes ressources sur le marché de la Mystic ?\n\n"
+            "**Clique sur le bouton ci-dessous** pour soumettre ta candidature.\n"
+            "Un formulaire s'ouvrira et un ticket sera créé automatiquement.\n\n"
+            "**Avantages du rôle Vendeur Certifié :**\n"
+            "• Accès aux commandes `!catalogue`, `!gestion`, `!vendu`\n"
+            "• Ton stock visible dans le catalogue officiel\n"
+            "• Accès au salon de gestion de stock\n\n"
+            "📋 Un staff examinera ta demande et te contactera dans le ticket."
+        ),
+        color=0xF1C40F
+    )
+    embed.set_footer(text="La Mystic — Système de marché")
+    await channel.send(embed=embed, view=VendeurView())
+    await ctx.send(f"✅ Embed vendeur posté dans {channel.mention} !", delete_after=5)
+
+
+@bot.command(name="accepter")
+async def accepter_cmd(ctx, *, raison: str = "Demande acceptée par le staff."):
+    """Accepte une demande vendeur dans un ticket vendeur."""
+    if not is_staff(ctx.author):
+        await ctx.send("❌ Réservé au staff.", delete_after=5)
+        return
+    topic = getattr(ctx.channel, "topic", None) or ""
+    if not topic.startswith("vendeur_certifie"):
+        await ctx.send("❌ Cette commande s'utilise uniquement dans un **ticket vendeur**.", delete_after=6)
+        return
+
+    parts  = topic.split("|")
+    try:
+        membre_id = int(parts[1]) if len(parts) > 1 else None
+    except ValueError:
+        membre_id = None
+
+    membre = ctx.guild.get_member(membre_id) if membre_id else None
+
+    # Attribuer le rôle vendeur
+    role_vendeur = cfg_role(ctx.guild, "role_vendeur")
+    if role_vendeur and membre:
+        try:
+            await membre.add_roles(role_vendeur, reason=f"Vendeur certifié accepté par {ctx.author}")
+        except Exception as e:
+            await ctx.send(f"⚠️ Impossible d'attribuer le rôle : {e}", delete_after=8)
+
+    embed = discord.Embed(
+        title="✅ Demande acceptée !",
+        description=(
+            f"{membre.mention if membre else 'Le membre'} est maintenant **Vendeur Certifié** !\n\n"
+            f"📝 **Raison :** {raison}\n"
+            f"🛡️ **Staff :** {ctx.author.mention}\n\n"
+            "Le ticket sera fermé dans **10 secondes**."
+        ),
+        color=0x2ECC71,
+        timestamp=now_utc()
+    )
+    await ctx.send(embed=embed)
+
+    # Log
+    await send_log(ctx.guild, discord.Embed(
+        title="✅ Vendeur Certifié — Demande acceptée",
+        description=f"{membre.mention if membre else f'ID {membre_id}'} accepté par {ctx.author.mention}\nRaison : {raison}",
+        color=0x2ECC71,
+        timestamp=now_utc()
+    ))
+
+    await asyncio.sleep(10)
+    await send_ticket_log(ctx.guild, ctx.channel, ctx.author)
+    try:
+        await ctx.channel.delete(reason="Demande vendeur acceptée")
+    except Exception:
+        pass
+
+
+@bot.command(name="refuser")
+async def refuser_cmd(ctx, *, raison: str = "Demande refusée par le staff."):
+    """Refuse une demande vendeur dans un ticket vendeur."""
+    if not is_staff(ctx.author):
+        await ctx.send("❌ Réservé au staff.", delete_after=5)
+        return
+    topic = getattr(ctx.channel, "topic", None) or ""
+    if not topic.startswith("vendeur_certifie"):
+        await ctx.send("❌ Cette commande s'utilise uniquement dans un **ticket vendeur**.", delete_after=6)
+        return
+
+    parts = topic.split("|")
+    try:
+        membre_id = int(parts[1]) if len(parts) > 1 else None
+    except ValueError:
+        membre_id = None
+
+    membre = ctx.guild.get_member(membre_id) if membre_id else None
+
+    embed = discord.Embed(
+        title="❌ Demande refusée",
+        description=(
+            f"{membre.mention if membre else 'Le membre'}, ta demande de **Vendeur Certifié** a été refusée.\n\n"
+            f"📝 **Raison :** {raison}\n"
+            f"🛡️ **Staff :** {ctx.author.mention}\n\n"
+            "Tu peux réessayer plus tard. Le ticket sera fermé dans **10 secondes**."
+        ),
+        color=0xE74C3C,
+        timestamp=now_utc()
+    )
+    await ctx.send(embed=embed)
+
+    # Log
+    await send_log(ctx.guild, discord.Embed(
+        title="❌ Vendeur Certifié — Demande refusée",
+        description=f"{membre.mention if membre else f'ID {membre_id}'} refusé par {ctx.author.mention}\nRaison : {raison}",
+        color=0xE74C3C,
+        timestamp=now_utc()
+    ))
+
+    await asyncio.sleep(10)
+    await send_ticket_log(ctx.guild, ctx.channel, ctx.author)
+    try:
+        await ctx.channel.delete(reason="Demande vendeur refusée")
+    except Exception:
+        pass
 
 @bot.event
 async def on_ready():
@@ -3885,6 +4226,7 @@ async def on_ready():
     # Toujours réenregistrer les vues persistantes (nécessaire après reconnexion)
     bot.add_view(TicketView())
     bot.add_view(RoleToggleView())
+    bot.add_view(VendeurView())
 
     # Toujours rafraîchir le cache des invitations (peut changer pendant une déconnexion)
     await init_invite_cache()
@@ -3912,3 +4254,4 @@ async def on_ready():
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
 bot.run(TOKEN)
+
