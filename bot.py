@@ -102,6 +102,7 @@ DEFAULT_CONFIG = {
     "salon_cmds_allowed":    ["bot-commands", "commandes"],
     "salon_objectifs":       "",
     "salon_gestion":         "",
+    "salon_vendeur":         "",
     "categorie_tickets":     "Tickets",
     "categorie_commandes":   "Commandes",
     "alt_min_days":          30,
@@ -3097,8 +3098,9 @@ CONFIG_GROUPS = {
         ("salon_ventes_log",    "💸 Logs des ventes",          False),
         ("salon_recherche",     "🔍 Recherche articles",       False),
         ("salon_cmds_allowed",  "✅ Salons commandes (liste)", True),
-        ("salon_objectifs",     "🎯 Salon objectifs",          False),
-        ("salon_gestion",       "📦 Salon gestion stock",      False),
+        ("salon_objectifs",     "🎯 Salon objectifs",                False),
+        ("salon_gestion",       "📦 Salon gestion stock",            False),
+        ("salon_vendeur",       "🛒 Salon demande vendeur certifié", False),
     ],
     "🎭 Rôles": [
         ("role_staff",          "👑 Staff / Admin (liste)",          True),
@@ -4085,13 +4087,20 @@ class VendeurView(discord.ui.View):
 
 @bot.command(name="vendeur")
 async def vendeur_cmd(ctx):
-    """Poste l'embed de candidature Vendeur Certifié dans le salon role_toggle."""
+    """Poste l'embed de candidature Vendeur Certifié dans le salon dédié."""
     if not is_staff(ctx.author):
         await ctx.send("❌ Réservé au staff.", delete_after=5)
         return
-    channel = cfg_channel(ctx.guild, "salon_role_toggle")
+
+    # Priorité : salon_vendeur → fallback salon_role_toggle
+    channel = cfg_channel(ctx.guild, "salon_vendeur")
     if not channel:
-        await ctx.send("❌ Salon `salon_role_toggle` introuvable. Configure-le via `!config`.", delete_after=8)
+        channel = cfg_channel(ctx.guild, "salon_role_toggle")
+    if not channel:
+        await ctx.send(
+            "❌ Aucun salon configuré. Configure `salon_vendeur` via `!config` → 🔊 Salons.",
+            delete_after=8
+        )
         return
 
     embed = discord.Embed(
@@ -4254,4 +4263,3 @@ async def on_ready():
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
 bot.run(TOKEN)
-
