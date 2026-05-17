@@ -292,15 +292,27 @@ spam_tracker: dict[int, dict[int, list[float]]] = defaultdict(lambda: defaultdic
 spam_warned:  dict[int, set[int]] = defaultdict(set)
 
 EXEMPT_COMMANDS = {
-    "pendu","devine","mot","pileouface","pendustop",
-    "morpion","morpionstop",
-    "level","lvl","xp",
-    "classement","top","leaderboard",
-    "giveaway","gw",
-    "pub","say","dit","fermer","stock","recherche",
-    "help","aide","commandes","info","setup",
-    "gestion","objectif","invite","vendu","cataloguesuppall",
-    "vendeur","accepter","refuser",
+    # Jeux
+    "pendu", "devine", "mot", "pileouface", "pof", "coinflip", "pendustop",
+    "morpion", "morpionstop",
+    # XP / Classement
+    "level", "lvl", "xp", "classement", "top", "leaderboard", "lb", "rang", "ranking",
+    # Giveaway
+    "giveaway", "gw",
+    # Staff outils
+    "pub", "say", "dit", "roster", "membres", "liste", "faction",
+    # Tickets
+    "ticket", "tickets", "support", "fermer", "close", "closeticket", "fermeticket",
+    # Marché
+    "stock", "recherche",
+    # Info
+    "info", "profil", "whois", "user", "membre",
+    # Help / Setup
+    "help", "aide", "commandes", "setup", "config",
+    # Catalogue
+    "gestion", "objectif", "vendu", "cataloguesuppall",
+    # Invitations / Vendeur
+    "invite", "vendeur", "accepter", "refuser",
 }
 
 
@@ -1371,7 +1383,7 @@ async def creer_ticket(interaction: discord.Interaction, type_ticket: str):
     await interaction.response.send_message(f"✅ Ticket créé : {channel.mention}", ephemeral=True)
 
 
-@bot.command()
+@bot.command(name="ticket", aliases=["tickets", "support"])
 async def ticket(ctx):
     if not is_staff(ctx.author):
         await ctx.send("❌ Permission refusée.", delete_after=5); return
@@ -1379,7 +1391,7 @@ async def ticket(ctx):
     await ctx.send(embed=embed, view=TicketView())
 
 
-@bot.command()
+@bot.command(name="fermer", aliases=["close", "closeticket", "fermeticket"])
 async def fermer(ctx):
     if "ticket-" not in ctx.channel.name:
         await ctx.send("❌ Uniquement dans un ticket.", delete_after=5); return
@@ -1391,7 +1403,7 @@ async def fermer(ctx):
     await view.wait()
 
 
-@bot.command()
+@bot.command(name="roster", aliases=["membres", "liste", "faction"])
 async def roster(ctx):
     if not is_staff(ctx.author):
         await ctx.send("❌ Permission refusée.", delete_after=5); return
@@ -1414,7 +1426,7 @@ async def roster(ctx):
 #  MODÉRATION
 # ═══════════════════════════════════════════════════════════════
 
-@bot.command()
+@bot.command(name="ban", aliases=["bannir", "expulser_def"])
 async def ban(ctx, member: discord.Member = None, *, reason: str = "Aucune raison fournie"):
     if not is_staff(ctx.author): await ctx.send("❌ Permission refusée.", delete_after=5); return
     if member is None: await ctx.send("❌ `!ban @membre raison`", delete_after=5); return
@@ -1429,7 +1441,7 @@ async def ban(ctx, member: discord.Member = None, *, reason: str = "Aucune raiso
     except discord.Forbidden: await ctx.send("❌ Je ne peux pas bannir ce membre.", delete_after=5)
 
 
-@bot.command()
+@bot.command(name="kick", aliases=["expulser", "virer"])
 async def kick(ctx, member: discord.Member = None, *, reason: str = "Aucune raison fournie"):
     if not is_staff(ctx.author): await ctx.send("❌ Permission refusée.", delete_after=5); return
     if member is None: await ctx.send("❌ `!kick @membre raison`", delete_after=5); return
@@ -1444,7 +1456,7 @@ async def kick(ctx, member: discord.Member = None, *, reason: str = "Aucune rais
     except discord.Forbidden: await ctx.send("❌ Je ne peux pas kick ce membre.", delete_after=5)
 
 
-@bot.command()
+@bot.command(name="mute", aliases=["silence", "rendre_muet"])
 async def mute(ctx, member: discord.Member = None, *, reason: str = "Aucune raison fournie"):
     if not is_staff(ctx.author): await ctx.send("❌ Permission refusée.", delete_after=5); return
     if member is None: await ctx.send("❌ `!mute @membre raison`", delete_after=5); return
@@ -1462,7 +1474,7 @@ async def mute(ctx, member: discord.Member = None, *, reason: str = "Aucune rais
     await send_log(ctx.guild, embed)
 
 
-@bot.command()
+@bot.command(name="unmute", aliases=["desilence", "parler"])
 async def unmute(ctx, member: discord.Member = None):
     if not is_staff(ctx.author): await ctx.send("❌ Permission refusée.", delete_after=5); return
     if member is None: await ctx.send("❌ `!unmute @membre`", delete_after=5); return
@@ -1477,7 +1489,7 @@ async def unmute(ctx, member: discord.Member = None):
     await send_log(ctx.guild, embed)
 
 
-@bot.command()
+@bot.command(name="effacer", aliases=["clear", "purge", "supprimer", "clean"])
 async def effacer(ctx, nombre: int = None):
     if not is_staff(ctx.author): await ctx.send("❌ Permission refusée.", delete_after=5); return
     if nombre is None: await ctx.send("❌ `!effacer 10`", delete_after=5); return
@@ -1491,7 +1503,7 @@ async def effacer(ctx, nombre: int = None):
     await send_log(ctx.guild, embed)
 
 
-@bot.command()
+@bot.command(name="info", aliases=["profil", "whois", "user", "membre"])
 async def info(ctx, member: discord.Member = None):
     member   = member or ctx.author
     roles    = [r.mention for r in reversed(member.roles) if r.name != "@everyone"]
@@ -2354,7 +2366,7 @@ async def _end_giveaway(gw_id, delay, channel, reward):
 #  CLASSEMENT
 # ═══════════════════════════════════════════════════════════════
 
-@bot.command(name="classement", aliases=["top", "leaderboard"])
+@bot.command(name="classement", aliases=["top", "leaderboard", "lb", "rang", "ranking"])
 async def classement_cmd(ctx):
     gid    = ctx.guild.id
     data   = load_user_data(gid)
@@ -2388,53 +2400,79 @@ async def classement_cmd(ctx):
     )[:10]
     top_lvl_lines = []
     for i, (uid, u) in enumerate(items_lvl):
-        m = guild.get_member(int(uid))
+        m    = guild.get_member(int(uid))
         name = m.display_name if m else "Inconnu"
         rank = medals[i] if i < 3 else f"`#{i+1}`"
         top_lvl_lines.append(f"{rank} **{name}** — Niv. {u.get('level', 0)} ({u.get('xp', 0)} XP)")
     top_lvl = "\n".join(top_lvl_lines) or "_Aucun joueur_"
 
     # ── Top Faction ────────────────────────────────────────────────────────
-    # Rôles de faction depuis la config (comparaison insensible à la casse)
-    faction_role_names_lower = {r.lower() for r in cfg.get("faction_roles", [
-        "Membre", "Recrue", "Officier", "Membre +", "Membre de confiance"
-    ])}
+    # On récupère les rôles du roster directement depuis la config
+    # (role_roster_leader, role_roster_officier, etc.) + faction_roles en fallback
+    roster_entries = [
+        ("role_roster_leader",    "👑"),
+        ("role_roster_officier",  "⚔️"),
+        ("role_roster_confiance", "🛡️"),
+        ("role_roster_plus",      "⭐"),
+        ("role_roster_membre",    "🔹"),
+        ("role_roster_recrue",    "🌱"),
+    ]
+    # Construire la liste des noms de rôles roster (nom → emoji)
+    roster_role_map = {}  # nom_lower → (nom_affiche, emoji)
+    for cfg_key, emoji in roster_entries:
+        nom = cfg.get(cfg_key, "")
+        if nom:
+            roster_role_map[nom.lower()] = (nom, emoji)
+
+    # Fallback : faction_roles si aucun roster configuré
+    if not roster_role_map:
+        for nom in cfg.get("faction_roles", ["Leader", "Officier", "Membre de confiance", "Membre +", "Membre", "Recrue"]):
+            roster_role_map[nom.lower()] = (nom, "⚔️")
 
     faction_members = []
     for member in guild.members:
         if member.bot:
             continue
-        # Vérifie si le membre a au moins un rôle de faction
-        member_role_names_lower = {r.name.lower() for r in member.roles}
-        if not faction_role_names_lower.intersection(member_role_names_lower):
+        member_roles_lower = {r.name.lower(): r.name for r in member.roles}
+        # Cherche le rôle roster le plus élevé que ce membre possède
+        role_display = ""
+        role_emoji   = ""
+        for cfg_key, emoji in roster_entries:
+            nom = cfg.get(cfg_key, "")
+            if nom and nom.lower() in member_roles_lower:
+                role_display = nom
+                role_emoji   = emoji
+                break
+        # Si pas trouvé via roster, essaie faction_roles
+        if not role_display:
+            for nom in cfg.get("faction_roles", []):
+                if nom.lower() in member_roles_lower:
+                    role_display = nom
+                    role_emoji   = "⚔️"
+                    break
+        if not role_display:
             continue
+
         uid_str = str(member.id)
         u = data.get(uid_str, {"level": 0, "xp": 0, "message_count": 0, "voice_time": 0.0})
-        # Récupère le rôle de faction le plus élevé (premier dans la liste config)
-        role_display = ""
-        for cfg_role_name in cfg.get("faction_roles", []):
-            if cfg_role_name.lower() in member_role_names_lower:
-                role_display = cfg_role_name
-                break
-        faction_members.append((uid_str, u, member, role_display))
+        faction_members.append((uid_str, u, member, role_display, role_emoji))
 
     # Tri par niveau décroissant, puis XP
-    faction_members.sort(
-        key=lambda x: (x[1].get("level", 0), x[1].get("xp", 0)),
-        reverse=True
-    )
+    faction_members.sort(key=lambda x: (x[1].get("level", 0), x[1].get("xp", 0)), reverse=True)
 
     if faction_members:
         top_faction_lines = []
-        for i, (uid, u, m, role_name) in enumerate(faction_members[:10]):
+        for i, (uid, u, m, role_name, role_emoji) in enumerate(faction_members[:10]):
             rank = medals[i] if i < 3 else f"`#{i+1}`"
-            role_tag = f"• *{role_name}*" if role_name else ""
             top_faction_lines.append(
-                f"{rank} **{m.display_name}** — Niv. {u.get('level', 0)} ({u.get('xp', 0)} XP) {role_tag}"
+                f"{rank} **{m.display_name}** — Niv. {u.get('level', 0)} ({u.get('xp', 0)} XP) {role_emoji} *{role_name}*"
             )
         top_faction = "\n".join(top_faction_lines)
     else:
-        top_faction = "_Aucun membre de faction trouvé_\n*Vérifie la config `faction_roles` avec `!config`*"
+        top_faction = (
+            "_Aucun membre de faction trouvé_\n"
+            "*(Configure les rôles du roster via `!config` → 🎖️ Roster)*"
+        )
 
     embed = discord.Embed(title="🏆 Classements", color=0xF1C40F, timestamp=now_utc())
     embed.add_field(
@@ -2442,7 +2480,7 @@ async def classement_cmd(ctx):
         value=top10_field("message_count", lambda u: f"{u['message_count']} msg"),
         inline=False
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n⭐ Top Niveau",  value=top_lvl,     inline=False)
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━\n⭐ Top Niveau",  value=top_lvl, inline=False)
     embed.add_field(
         name="━━━━━━━━━━━━━━━━━━\n🎤 Top Vocal",
         value=top10_field("_voice_live", lambda u: fmt_voice(u["_voice_live"])),
@@ -3367,7 +3405,7 @@ def _help_embed_accueil(is_staff_user: bool) -> discord.Embed:
         title="📖 Aide — La Mystic Bot",
         description=(
             "Bienvenue dans l'aide du bot !\n"
-            "Utilise le **menu déroulant** ci-dessous pour naviguer entre les catégories.\n\n"
+            "Utilise le **menu déroulant** ci-dessous pour naviguer.\n\n"
             "**Légende :**\n"
             "🔒 Réservé au **Staff**\n"
             "🏷️ Réservé aux **Vendeurs certifiés** (ou Staff)\n"
@@ -3386,23 +3424,23 @@ def _help_embed_accueil(is_staff_user: bool) -> discord.Embed:
 def _help_embed_general() -> discord.Embed:
     embed = discord.Embed(title="👤 Général", color=0x3498DB)
     embed.add_field(
-        name="📊 `!level` · alias : `!lvl` · `!xp`",
-        value="Affiche ton niveau, ton XP, ton nombre de messages et ton temps en vocal.\n**Usage :** `!level` ou `!level @membre`",
+        name="📊 `!level` · alias : `!lvl` `!xp`",
+        value="Affiche ton niveau, XP, messages et temps vocal.\n**Usage :** `!level` ou `!level @membre`",
         inline=False
     )
     embed.add_field(
-        name="🏆 `!classement` · alias : `!top` · `!leaderboard`",
-        value="Affiche le top 10 des membres par messages, niveau, temps vocal et faction.",
+        name="🏆 `!classement` · alias : `!top` `!leaderboard` `!lb` `!rang` `!ranking`",
+        value="Top 10 par messages, niveau, vocal et faction. La section **Top Faction** utilise automatiquement les rôles configurés dans le roster (`!config` → 🎖️ Roster).",
         inline=False
     )
     embed.add_field(
-        name="🔍 `!info`",
-        value="Affiche les informations détaillées d'un membre (rôles, statut, date d'arrivée, permissions…).\n**Usage :** `!info` ou `!info @membre`",
+        name="🔍 `!info` · alias : `!profil` `!whois` `!user` `!membre`",
+        value="Infos complètes d'un membre : rôles, statut, dates, permissions.\n**Usage :** `!info` ou `!info @membre`",
         inline=False
     )
     embed.add_field(
-        name="🪙 `!pileouface` · alias : `!pof` · `!coinflip`",
-        value="Lance une pièce — Pile ou Face ? Résultat aléatoire.",
+        name="🪙 `!pileouface` · alias : `!pof` `!coinflip`",
+        value="Lance une pièce — Pile ou Face ? Résultat aléatoire instantané.",
         inline=False
     )
     embed.add_field(
@@ -3411,11 +3449,16 @@ def _help_embed_general() -> discord.Embed:
         inline=False
     )
     embed.add_field(
-        name="📖 `!help` · alias : `!aide` · `!commandes`",
+        name="📣 `!say #salon message` · alias : `!dit` 🔒",
+        value="Fait parler le bot dans n'importe quel salon.\n**Usage :** `!say #général Bonsoir !`",
+        inline=False
+    )
+    embed.add_field(
+        name="📖 `!help` · alias : `!aide` `!commandes`",
         value="Affiche ce menu d'aide interactif.",
         inline=False
     )
-    embed.set_footer(text="👤 = accessible à tous")
+    embed.set_footer(text="👤 = accessible à tous sauf mentions 🔒")
     return embed
 
 
@@ -3426,18 +3469,17 @@ def _help_embed_invitations() -> discord.Embed:
         value=(
             "Affiche le nombre de membres invités par un joueur et la liste complète.\n"
             "**Usage :** `!invite LGM`\n"
-            "✅ = membre encore présent · ❌ = membre parti\n"
-            "La recherche est floue : `LG` peut trouver `LGM`."
+            "✅ = encore présent · ❌ = parti\n"
+            "Recherche floue : `LG` peut trouver `LGM`."
         ),
         inline=False
     )
     embed.add_field(
-        name="📋 Comment fonctionne le système ?",
+        name="📋 Logs automatiques",
         value=(
-            "Quand un membre rejoint, le bot compare les invitations avant/après pour détecter laquelle a été utilisée.\n"
-            "Un log est automatiquement envoyé dans le salon logs avec :\n"
-            "• **Pseudo a été invité par Pseudo** si détecté\n"
-            "• **Invitant inconnu** si lien vanity ou DM Discord"
+            "À chaque arrivée, un embed est envoyé dans les logs :\n"
+            "• ✅ **Pseudo** a été invité par **Pseudo** (+ total invitations)\n"
+            "• ⚠️ **Invitant inconnu** si lien vanity, DM Discord ou permission manquante"
         ),
         inline=False
     )
@@ -3446,39 +3488,39 @@ def _help_embed_invitations() -> discord.Embed:
 
 
 def _help_embed_tickets() -> discord.Embed:
-    embed = discord.Embed(title="🎫 Tickets", color=0xE67E22)
+    embed = discord.Embed(title="🎫 Tickets & Vendeur", color=0xE67E22)
     embed.add_field(
-        name="🎫 `!ticket` 🔒",
+        name="🎫 `!ticket` · alias : `!tickets` `!support` 🔒",
         value=(
-            "Poste le panneau de tickets dans le salon actuel avec deux boutons :\n"
-            "• **📋 Demande de recrutement** → ouvre un ticket avec formulaire complet\n"
-            "• **📩 Autre demande** → ouvre un ticket libre\n"
-            "Les tickets sont privés entre le membre, le staff et les recruteurs."
+            "Poste le panneau de tickets avec 2 boutons :\n"
+            "• **📋 Demande de recrutement** → ticket + formulaire complet\n"
+            "• **📩 Autre demande** → ticket libre"
         ),
         inline=False
     )
     embed.add_field(
-        name="🔒 `!fermer`",
+        name="🔒 `!fermer` · alias : `!close` `!closeticket`",
         value=(
-            "Ferme le ticket actuel après confirmation (30 secondes).\n"
-            "Un **transcript HTML** complet est automatiquement sauvegardé dans les logs.\n"
-            "Utilisable dans n'importe quel ticket (`ticket-...`)."
+            "Ferme le ticket actuel (30s de confirmation).\n"
+            "Un **transcript HTML** est sauvegardé automatiquement dans les logs.\n"
+            "Fonctionne aussi dans les tickets vendeur."
         ),
         inline=False
     )
     embed.add_field(
         name="🛒 `!vendeur` 🔒",
         value=(
-            "Poste l'embed de candidature **Vendeur Certifié** dans le salon rôles.\n"
-            "Les membres cliquent sur **👉 Devenir vendeur certifié** → formulaire → ticket créé automatiquement."
+            "Poste l'embed **Devenir Vendeur Certifié** dans le salon configuré.\n"
+            "Les membres cliquent → formulaire → ticket créé automatiquement.\n"
+            "Configure le salon via `!config` → 🔊 Salons → `salon_vendeur`."
         ),
         inline=False
     )
     embed.add_field(
         name="✅ `!accepter [raison]` 🔒",
         value=(
-            "Dans un ticket vendeur : accepte la demande, attribue le rôle Vendeur Certifié et ferme le ticket.\n"
-            "**Usage :** `!accepter Stock suffisant et profil sérieux`"
+            "Dans un ticket vendeur : accepte la demande et attribue le rôle **Vendeur Certifié**.\n"
+            "**Usage :** `!accepter Stock suffisant, profil sérieux`"
         ),
         inline=False
     )
@@ -3493,13 +3535,12 @@ def _help_embed_tickets() -> discord.Embed:
     embed.add_field(
         name="🎯 `!objectif` 🔒",
         value=(
-            "Ouvre le panneau interactif des objectifs du serveur.\n"
-            "Boutons disponibles : ➕ Ajouter · 🗑 Supprimer · ✅ Marquer terminé\n"
-            "L'embed se met à jour automatiquement."
+            "Panneau interactif des objectifs du serveur.\n"
+            "Boutons : ➕ Ajouter · 🗑 Supprimer · ✅ Marquer terminé"
         ),
         inline=False
     )
-    embed.set_footer(text="🔒 = Staff requis pour créer · !fermer accessible à tous dans un ticket")
+    embed.set_footer(text="🔒 = Staff · !fermer utilisable par tous dans un ticket")
     return embed
 
 
@@ -3510,7 +3551,7 @@ def _help_embed_marche() -> discord.Embed:
         value=(
             "Recherche intelligente (floue) dans le catalogue.\n"
             "**Usage :** `!recherche paladium`\n"
-            "Fonctionne même avec un nom partiel ou approximatif."
+            "Fonctionne avec un nom partiel ou approximatif."
         ),
         inline=False
     )
@@ -3520,21 +3561,18 @@ def _help_embed_marche() -> discord.Embed:
             "Ajoute ou met à jour un article dans le catalogue.\n"
             "**Usage :** `!catalogue paladium ingot 10 500$`\n"
             "Si l'article existe déjà, le stock est additionné.\n"
-            "Une alerte s'affiche si ton prix est plus élevé qu'un concurrent."
+            "Alerte si ton prix est plus cher qu'un concurrent."
         ),
         inline=False
     )
     embed.add_field(
         name="🗑️ `!cataloguesupp` 🏷️",
-        value=(
-            "Supprime un de tes articles du catalogue (ou n'importe lequel si Staff).\n"
-            "Une liste numérotée s'affiche, réponds avec le numéro ou le nom."
-        ),
+        value="Supprime un de tes articles (liste numérotée, réponds avec le numéro ou le nom).",
         inline=False
     )
     embed.add_field(
         name="🗑️ `!cataloguesuppall` 🔒",
-        value="Vide entièrement le catalogue. Demande une confirmation avant suppression.",
+        value="Vide entièrement le catalogue. Demande confirmation avant suppression.",
         inline=False
     )
     embed.add_field(
@@ -3550,29 +3588,27 @@ def _help_embed_marche() -> discord.Embed:
         name="⚙️ `!gestion` 🏷️",
         value=(
             "Interface interactive pour gérer ton stock étape par étape.\n"
-            "Pose les questions : nom → quantité → prix.\n"
-            "Idéal pour ne pas se tromper de format."
+            "Questions posées : nom → quantité → prix. Idéal pour éviter les erreurs."
         ),
         inline=False
     )
     embed.add_field(
         name="🛒 `!commande` 🔒",
-        value="Poste l'embed de commande permanent dans le salon commandes (menu déroulant + recherche).",
+        value="Poste l'embed de commande permanent (menu déroulant + recherche).",
         inline=False
     )
     embed.add_field(
         name="✅ `!vendu` 🏷️",
         value=(
-            "À utiliser dans un ticket de commande market.\n"
-            "Affiche les boutons **Vendu** / **Pas vendu**.\n"
-            "• Vendu → déduit le stock, log la vente, ferme le ticket\n"
-            "• Pas vendu → ferme le ticket sans modifier le stock"
+            "Dans un ticket de commande market.\n"
+            "• ✅ Vendu → déduit le stock, log la vente, ferme le ticket\n"
+            "• ❌ Pas vendu → ferme le ticket sans modifier le stock"
         ),
         inline=False
     )
     embed.add_field(
         name="🔔 `!role` 🔒",
-        value="Poste le bouton de toggle des notifications marché dans le salon dédié.",
+        value="Poste le bouton toggle des notifications marché dans le salon dédié.",
         inline=False
     )
     embed.set_footer(text="🏷️ = Vendeur certifié ou Staff · 🔒 = Staff uniquement")
@@ -3584,36 +3620,36 @@ def _help_embed_jeux() -> discord.Embed:
     embed.add_field(
         name="🎯 Pendu",
         value=(
-            "`!pendu` — Lance une partie (choix mot aléatoire ou personnalisé via DM)\n"
+            "`!pendu` — Lance une partie (mot aléatoire ou personnalisé via DM)\n"
             "`!devine <lettre>` — Propose une lettre\n"
             "`!mot <mot>` — Tente de deviner le mot entier\n"
-            "`!pendustop` 🔒 — Arrête la partie en cours\n"
-            "Durée max : **30 minutes** · Récompense : **+150 XP** pour le gagnant"
+            "`!pendustop` 🔒 — Arrête la partie\n"
+            "Durée max : **30 min** · Récompense : **+150 XP**"
         ),
         inline=False
     )
     embed.add_field(
         name="❌⭕ Morpion",
         value=(
-            "`!morpion @joueur` — Lance une partie contre un autre membre\n"
-            "`!morpionstop` 🔒 — Arrête la partie en cours\n"
+            "`!morpion @joueur` — Lance une partie contre un membre\n"
+            "`!morpionstop` 🔒 — Arrête la partie\n"
             "Le perdant peut demander une **revanche**.\n"
-            "Durée max : **5 minutes** · Récompense : **+50 XP** pour le gagnant"
+            "Durée max : **5 min** · Récompense : **+50 XP**"
         ),
         inline=False
     )
     embed.add_field(
         name="🪙 Pile ou Face",
-        value="`!pileouface` · alias : `!pof` · `!coinflip` — Résultat aléatoire instantané.",
+        value="`!pileouface` · alias : `!pof` `!coinflip` — Résultat aléatoire.",
         inline=False
     )
     embed.add_field(
-        name="🎉 Giveaway 🔒",
+        name="🎉 Giveaway · alias : `!gw` 🔒",
         value=(
-            "`!giveaway <durée> <récompense>` · alias : `!gw`\n"
-            "**Durées :** `10s` · `5m` · `2h` · `1j` (ou combinés : `1h30m`)\n"
+            "`!giveaway <durée> <récompense>`\n"
+            "**Durées :** `10s` `5m` `2h` `1j` (ou combinés : `1h30m`)\n"
             "**Exemple :** `!giveaway 1h Pack de paladiums`\n"
-            "Les membres cliquent pour participer, le gagnant est tiré au sort à la fin."
+            "Les membres cliquent pour participer, gagnant tiré au sort à la fin."
         ),
         inline=False
     )
@@ -3626,46 +3662,43 @@ def _help_embed_protections() -> discord.Embed:
     embed.add_field(
         name="🔗 Anti-liens",
         value=(
-            "Tout lien envoyé par un non-admin est automatiquement supprimé.\n"
-            "Seuls les domaines autorisés passent (par défaut : `tenor.com`, `giphy.com`).\n"
-            "Modifiable via `!config` → Sécurité → `allowed_domains`."
+            "Tout lien non autorisé est supprimé automatiquement.\n"
+            "Domaines autorisés par défaut : `tenor.com`, `giphy.com`.\n"
+            "Modifiable : `!config` → ⚙️ Sécurité → `allowed_domains`."
         ),
         inline=False
     )
     embed.add_field(
         name="⚡ Anti-spam",
         value=(
-            "Si un membre envoie trop de messages en peu de temps :\n"
+            "Si trop de messages en peu de temps :\n"
             "1. **Avertissement** public\n"
             "2. **Expulsion automatique** si ça recommence\n"
-            "Seuils configurables via `!config` → Sécurité."
+            "Seuils configurables via `!config` → ⚙️ Sécurité."
         ),
         inline=False
     )
     embed.add_field(
         name="🛡️ Anti-alt",
         value=(
-            "À chaque arrivée, le bot vérifie :\n"
+            "À chaque arrivée, vérification :\n"
             "• Âge du compte Discord (défaut : < 30 jours = suspect)\n"
             "• Absence d'avatar\n"
-            "Une alerte est envoyée dans les logs si suspect."
+            "Alerte envoyée dans les logs si suspect."
         ),
         inline=False
     )
     embed.add_field(
         name="🚨 Anti-raid",
         value=(
-            "Si plusieurs comptes suspects rejoignent en peu de temps, une alerte raid est envoyée.\n"
-            "Seuil et fenêtre de temps configurables via `!config`."
+            "Si plusieurs comptes suspects rejoignent rapidement → alerte raid.\n"
+            "Seuil et fenêtre configurables via `!config` → ⚙️ Sécurité."
         ),
         inline=False
     )
     embed.add_field(
-        name="🗑️ Auto-suppression marché",
-        value=(
-            "Dans le salon **catalogue**, tout message non protégé est supprimé automatiquement\n"
-            "pour garder l'embed du catalogue propre."
-        ),
+        name="🗑️ Auto-suppression catalogue",
+        value="Dans le salon catalogue, tout message non protégé est supprimé pour garder l'embed propre.",
         inline=False
     )
     embed.set_footer(text="Toutes ces protections sont automatiques, aucune commande requise")
@@ -3675,39 +3708,39 @@ def _help_embed_protections() -> discord.Embed:
 def _help_embed_moderation() -> discord.Embed:
     embed = discord.Embed(title="🔨 Modération 🔒", color=0xE74C3C)
     embed.add_field(
-        name="🔨 `!ban @membre [raison]`",
-        value="Bannit définitivement un membre du serveur. Les messages des dernières 24h sont supprimés.",
+        name="🔨 `!ban @membre [raison]` · alias : `!bannir`",
+        value="Bannit définitivement un membre. Les messages des 24 dernières heures sont supprimés.",
         inline=False
     )
     embed.add_field(
-        name="👢 `!kick @membre [raison]`",
+        name="👢 `!kick @membre [raison]` · alias : `!expulser` `!virer`",
         value="Expulse un membre (il peut revenir avec une invitation).",
         inline=False
     )
     embed.add_field(
-        name="🔇 `!mute @membre [raison]`",
-        value="Rend un membre muet (ne peut plus écrire ni parler). Crée le rôle Muted si absent.",
+        name="🔇 `!mute @membre [raison]` · alias : `!silence`",
+        value="Rend un membre muet (ne peut plus écrire ni parler en vocal).",
         inline=False
     )
     embed.add_field(
-        name="🔊 `!unmute @membre`",
+        name="🔊 `!unmute @membre` · alias : `!desilence` `!parler`",
         value="Retire le mute d'un membre.",
         inline=False
     )
     embed.add_field(
-        name="🗑️ `!effacer <nombre>`",
+        name="🗑️ `!effacer <n>` · alias : `!clear` `!purge` `!supprimer` `!clean`",
         value="Supprime les X derniers messages du salon (max 100).\n**Usage :** `!effacer 20`",
         inline=False
     )
     embed.add_field(
-        name="📋 `!roster`",
-        value="Met à jour l'embed du roster dans le salon roster avec les membres actuels par rôle.",
+        name="📋 `!roster` · alias : `!membres` `!liste` `!faction`",
+        value="Met à jour l'embed du roster dans le salon roster avec les membres par rôle.",
         inline=False
     )
     embed.add_field(
-        name="📣 `!say #salon <message>` · alias : `!dit`",
+        name="📣 `!say #salon message` · alias : `!dit`",
         value=(
-            "Fait envoyer un message par le bot dans n'importe quel salon.\n"
+            "Fait parler le bot dans n'importe quel salon.\n"
             "**Usage :** `!say #général Bonsoir tout le monde !`"
         ),
         inline=False
@@ -3721,24 +3754,24 @@ def _help_embed_config() -> discord.Embed:
     embed.add_field(
         name="⚙️ `!config`",
         value=(
-            "Ouvre le panneau de configuration interactif complet.\n"
-            "Permet de configurer tous les salons, rôles, catégories et paramètres de sécurité.\n"
-            "Interface par menus déroulants, aucune syntaxe à retenir."
+            "Panneau de configuration interactif complet.\n"
+            "Menus déroulants pour configurer salons, rôles, catégories et sécurité.\n"
+            "Aucune syntaxe à retenir."
         ),
         inline=False
     )
     embed.add_field(
         name="🛠️ `!setup`",
-        value="Affiche un rappel pour utiliser `!config`.",
+        value="Rappel pour utiliser `!config`.",
         inline=False
     )
     embed.add_field(
         name="📋 Clés configurables",
         value=(
-            "**Salons :** logs, bienvenue, roster, catalogue, commandes, notifications, ventes…\n"
-            "**Rôles :** staff, visiteur, vendeur, recruteur, acheteur…\n"
-            "**Sécurité :** âge anti-alt, seuil anti-raid, limites anti-spam\n"
-            "**Roster :** rôles affichés dans l'embed roster"
+            "**🔊 Salons :** logs, bienvenue, roster, catalogue, commandes, notifications, vendeur, objectifs…\n"
+            "**🎭 Rôles :** staff, visiteur, vendeur, recruteur, acheteur, officier, leader…\n"
+            "**🎖️ Roster :** rôles affichés dans le roster (utilisés aussi par `!classement` Top Faction)\n"
+            "**⚙️ Sécurité :** âge anti-alt, seuil anti-raid, limites anti-spam, domaines autorisés"
         ),
         inline=False
     )
@@ -3747,16 +3780,16 @@ def _help_embed_config() -> discord.Embed:
 
 
 HELP_CATEGORIES_PUBLIC = [
-    ("👤 Général",          "general"),
-    ("📨 Invitations",      "invitations"),
-    ("🎫 Tickets & Objectifs", "tickets"),
-    ("🏪 Marché",           "marche"),
-    ("🎮 Mini-jeux",        "jeux"),
-    ("🛡️ Protections",     "protections"),
+    ("👤 Général",             "general"),
+    ("📨 Invitations",         "invitations"),
+    ("🎫 Tickets & Vendeur",   "tickets"),
+    ("🏪 Marché",              "marche"),
+    ("🎮 Mini-jeux",           "jeux"),
+    ("🛡️ Protections",        "protections"),
 ]
 HELP_CATEGORIES_STAFF = [
-    ("🔨 Modération",       "moderation"),
-    ("⚙️ Configuration",   "config"),
+    ("🔨 Modération",          "moderation"),
+    ("⚙️ Configuration",      "config"),
 ]
 
 
@@ -3767,7 +3800,7 @@ class HelpSelect(discord.ui.Select):
         options = [
             discord.SelectOption(label="🏠 Accueil", value="accueil", description="Page d'accueil de l'aide"),
         ] + [
-            discord.SelectOption(label=label, value=value, description=f"Voir les commandes : {label}")
+            discord.SelectOption(label=label, value=value, description=f"Commandes : {label}")
             for label, value in categories
         ]
         super().__init__(
@@ -3779,15 +3812,15 @@ class HelpSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         choice = self.values[0]
         embed_map = {
-            "accueil":      _help_embed_accueil(self.is_staff_user),
-            "general":      _help_embed_general(),
-            "invitations":  _help_embed_invitations(),
-            "tickets":      _help_embed_tickets(),
-            "marche":       _help_embed_marche(),
-            "jeux":         _help_embed_jeux(),
-            "protections":  _help_embed_protections(),
-            "moderation":   _help_embed_moderation(),
-            "config":       _help_embed_config(),
+            "accueil":     _help_embed_accueil(self.is_staff_user),
+            "general":     _help_embed_general(),
+            "invitations": _help_embed_invitations(),
+            "tickets":     _help_embed_tickets(),
+            "marche":      _help_embed_marche(),
+            "jeux":        _help_embed_jeux(),
+            "protections": _help_embed_protections(),
+            "moderation":  _help_embed_moderation(),
+            "config":      _help_embed_config(),
         }
         embed = embed_map.get(choice, _help_embed_accueil(self.is_staff_user))
         await interaction.response.edit_message(embed=embed, view=self.view)
