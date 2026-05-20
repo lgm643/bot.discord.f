@@ -20,9 +20,10 @@ CONFIG_DIR = Path("/app/data/configs")
 DATA_DIR = Path("/app/data/users")
 GAMES_DIR = Path("/app/data/games")
 CATALOGUE_DIR = Path("/app/data/catalogues")
+GIVEAWAYS_DIR = Path("/app/data/giveaways")
 DB_PATH = Path("/app/data/bot.db")
 
-for d in [CONFIG_DIR, DATA_DIR, GAMES_DIR, CATALOGUE_DIR, DB_PATH.parent]:
+for d in [CONFIG_DIR, DATA_DIR, GAMES_DIR, CATALOGUE_DIR, GIVEAWAYS_DIR, DB_PATH.parent]:
     d.mkdir(parents=True, exist_ok=True)
 
 # ═══════════════════════════════════════════════════════════════
@@ -36,7 +37,7 @@ EXEMPT_COMMANDS = {
     "pendu", "devine", "mot", "pileouface", "pof", "coinflip", "pendustop",
     "morpion", "morpionstop",
     "level", "lvl", "xp", "classement", "top", "leaderboard", "lb", "rang", "ranking",
-    "giveaway", "gw",
+    "giveaway", "gw", "reroll",
     "pub", "say", "dit", "roster", "membres", "liste", "faction",
     "ticket", "tickets", "support", "fermer", "close", "closeticket", "fermeticket",
     "stock", "recherche",

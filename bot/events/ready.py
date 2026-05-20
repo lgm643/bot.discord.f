@@ -53,6 +53,9 @@ async def on_ready():
             load_config(guild.id)
             print(f"[CONFIG] Serveur configuré : {guild.name} (ID: {guild.id})")
 
+        from bot.utils.giveaways import load_all_ended_giveaways
+        load_all_ended_giveaways()
+
         asyncio.create_task(_auto_refresh_loop())
         from bot.utils.invite_rewards import invite_rewards_sync_loop
         asyncio.create_task(invite_rewards_sync_loop())

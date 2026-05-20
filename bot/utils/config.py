@@ -70,6 +70,8 @@ DEFAULT_CONFIG = {
     "inviteRole10":          "",
     "inviteRole20":          "",
     "inviteLogsChannel":     "",
+    "role_giveaway_staff":   "",
+    "salon_giveaway_logs":   "",
 }
 
 

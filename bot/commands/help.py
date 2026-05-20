@@ -280,12 +280,15 @@ def _help_embed_jeux() -> discord.Embed:
         inline=False
     )
     embed.add_field(
-        name="🎉 Giveaway · alias : `!gw` 🔒",
+        name="🎉 Giveaways · alias : `!gw` 🔒",
         value=(
             "`!giveaway <durée> <récompense>`\n"
             "**Durées :** `10s` `5m` `2h` `1j` (ou combinés : `1h30m`)\n"
             "**Exemple :** `!giveaway 1h Pack de paladiums`\n"
-            "Les membres cliquent pour participer, gagnant tiré au sort à la fin."
+            "Les membres cliquent pour participer, gagnant tiré au sort à la fin.\n\n"
+            "`!reroll <messageID>`\n"
+            "→ Relance un giveaway terminé et sélectionne un nouveau gagnant.\n"
+            "*(Admin ou rôle staff giveaway — configurable via `!config`)*"
         ),
         inline=False
     )

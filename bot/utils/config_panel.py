@@ -24,6 +24,10 @@ CONFIG_GROUPS = {
         ("salon_vendeur", "🛒 Salon demande vendeur certifié", False),
         ("inviteLogsChannel", "📨 Logs paliers invitations", False),
     ],
+    "🎉 Giveaways": [
+        ("role_giveaway_staff", "🎉 Rôle staff giveaway (reroll)", False),
+        ("salon_giveaway_logs", "📜 Logs giveaways / reroll", False),
+    ],
     "📨 Récompenses invitations": [
         ("inviteRole5",  "🐦‍🔥 Rôle palier 5 invitations (Initié)", False),
         ("inviteRole10", "🐦‍🔥 Rôle palier 10 invitations (Marchand Elite)", False),
