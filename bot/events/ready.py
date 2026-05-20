@@ -54,6 +54,8 @@ async def on_ready():
             print(f"[CONFIG] Serveur configuré : {guild.name} (ID: {guild.id})")
 
         asyncio.create_task(_auto_refresh_loop())
+        from bot.utils.invite_rewards import invite_rewards_sync_loop
+        asyncio.create_task(invite_rewards_sync_loop())
         print("[BOT] Prêt !")
     else:
         print("[BOT] Reconnexion détectée — restauration ignorée (déjà effectuée)")

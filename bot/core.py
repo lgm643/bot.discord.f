@@ -43,7 +43,7 @@ EXEMPT_COMMANDS = {
     "info", "profil", "whois", "user", "membre",
     "help", "aide", "commandes", "setup", "config",
     "gestion", "objectif", "vendu", "cataloguesuppall",
-    "invite", "vendeur", "accepter", "refuser",
+    "invite", "topinvites", "vendeur", "accepter", "refuser",
 }
 
 

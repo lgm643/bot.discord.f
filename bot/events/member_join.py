@@ -81,6 +81,12 @@ async def on_member_join(member: discord.Member):
     except Exception as e:
         print(f"[INVITE] Erreur critique non gérée pour {member.name} : {e}")
 
+    try:
+        from bot.utils.invite_rewards import on_invite_chain_update
+        await on_invite_chain_update(member.guild, member.id)
+    except Exception as e:
+        print(f"[INVITE_REWARDS] Erreur après join pour {member.name} : {e}")
+
     # ── Rôle visiteur ──────────────────────────────────────────────────────
     visitor_role = cfg_role(member.guild, "role_visiteur")
     if visitor_role:

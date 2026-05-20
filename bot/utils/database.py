@@ -39,6 +39,12 @@ def init_db():
                 invited_name TEXT    NOT NULL DEFAULT '',
                 joined_at    REAL    NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS invite_reward_state (
+                guild_id INTEGER NOT NULL,
+                user_id  INTEGER NOT NULL,
+                tier     INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            );
         """)
         # Migration : ajoute invited_name si la table existait sans cette colonne
         try:

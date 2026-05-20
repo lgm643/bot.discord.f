@@ -22,6 +22,12 @@ CONFIG_GROUPS = {
         ("salon_objectifs", "🎯 Salon objectifs", False),
         ("salon_gestion", "📦 Salon gestion stock", False),
         ("salon_vendeur", "🛒 Salon demande vendeur certifié", False),
+        ("inviteLogsChannel", "📨 Logs paliers invitations", False),
+    ],
+    "📨 Récompenses invitations": [
+        ("inviteRole5",  "🐦‍🔥 Rôle palier 5 invitations (Initié)", False),
+        ("inviteRole10", "🐦‍🔥 Rôle palier 10 invitations (Marchand Elite)", False),
+        ("inviteRole20", "🐦‍🔥 Rôle palier 20 invitations (Maître Phénix)", False),
     ],
     "🎭 Rôles": [
         ("role_staff", "👑 Staff / Admin (liste)", True),

@@ -153,7 +153,12 @@ class CommandeSelect(discord.ui.Select):
             embed_ticket.add_field(name="🛒 Acheteur",  value=acheteur.mention,  inline=True)
             embed_ticket.add_field(name="👤 Vendeur",   value=vendeur.mention if vendeur else f"<@{item['vendeur_id']}>", inline=True)
             embed_ticket.set_footer(text="Vendeur : utilise !vendu pour confirmer ou refuser")
-            await ticket_channel.send(content=f"{acheteur.mention} {vendeur.mention if vendeur else ''}", embed=embed_ticket)
+            from bot.utils.invite_rewards import build_market_reward_embed
+            reward_embed = build_market_reward_embed(guild, acheteur)
+            await ticket_channel.send(
+                content=f"{acheteur.mention} {vendeur.mention if vendeur else ''}",
+                embeds=[embed_ticket, reward_embed],
+            )
             await interaction.followup.send(f"✅ Ticket créé : {ticket_channel.mention}", ephemeral=True)
         finally:
             _pending_orders.pop(pk, None)

@@ -96,6 +96,21 @@ def _help_embed_invitations() -> discord.Embed:
         inline=False
     )
     embed.add_field(
+        name="🏆 `!topinvites`",
+        value="Classement des **10 meilleurs inviteurs** (invitations actives — membres encore présents).",
+        inline=False,
+    )
+    embed.add_field(
+        name="🐦‍🔥 Paliers & récompenses",
+        value=(
+            "**5** invitations actives → Initié (−5% market)\n"
+            "**10** → Marchand Elite (−10%)\n"
+            "**20** → Maître Phénix (−20%)\n"
+            "Rôles et logs configurables via `!config`."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="📋 Logs automatiques",
         value=(
             "À chaque arrivée, un embed est envoyé dans les logs :\n"

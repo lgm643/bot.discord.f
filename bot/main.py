@@ -7,6 +7,7 @@ from bot.utils.database import init_db
 init_db()
 
 import bot.commands.invites  # noqa: F401
+import bot.commands.topinvites  # noqa: F401
 import bot.commands.market  # noqa: F401
 import bot.commands.moderation  # noqa: F401
 import bot.commands.misc  # noqa: F401

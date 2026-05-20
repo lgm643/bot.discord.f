@@ -66,6 +66,10 @@ DEFAULT_CONFIG = {
     ],
     "faction_roles":  ["Leader", "Officier", "Membre de confiance", "Membre +", "Membre", "Recrue"],
     "allowed_domains": ["tenor.com", "giphy.com"],
+    "inviteRole5":           "",
+    "inviteRole10":          "",
+    "inviteRole20":          "",
+    "inviteLogsChannel":     "",
 }
 
 
