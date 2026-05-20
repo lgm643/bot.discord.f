@@ -30,6 +30,17 @@ ou :
 python bot.py
 ```
 
+## Déploiement Railway
+
+1. **New Project** → **Deploy from GitHub repo**
+2. Choisir le dépôt : `lgm643/bot.discord.f` (branche `main`)
+3. **Variables** : ajouter `DISCORD_TOKEN` = ton token bot
+4. **Start command** (si pas auto) : `python -m bot.main`
+5. **Volume** (recommandé) : monter `/app/data` pour garder DB, configs, catalogues, giveaways
+6. Cliquer **Deploy** ou **Redeploy** après chaque push GitHub
+
+Vérifier sur GitHub que le dernier commit contient `bot/commands/giveaway.py` et `bot/utils/giveaways.py`.
+
 ## Modifier une fonctionnalité
 
 | Système | Fichier(s) |
