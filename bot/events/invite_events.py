@@ -1,20 +1,8 @@
-import asyncio
-import io
-import os
-import re
-import time
-import json
-import random
-import sqlite3
-import difflib
-from datetime import datetime, timezone
-from collections import defaultdict
-from pathlib import Path
-
 import discord
-from discord.ext import commands
 
 from bot.core import bot
+from bot.utils.invites import _invite_cache, _get_invite_lock
+
 
 @bot.event
 async def on_invite_create(invite: discord.Invite):

@@ -1,26 +1,16 @@
-import asyncio
 import io
-import os
-import re
-import time
-import json
-import random
-import sqlite3
-import difflib
-from datetime import datetime, timezone
-from collections import defaultdict
-from pathlib import Path
 
 import discord
-from discord.ext import commands
 
-from bot.core import bot
+from bot.utils.helpers import now_utc, now_str
+from bot.utils.logs import get_log_channel
+
 
 async def generate_transcript(channel: discord.TextChannel) -> str:
     messages = []
     async for msg in channel.history(limit=None, oldest_first=True):
-        ts      = msg.created_at.strftime("%d/%m/%Y %H:%M:%S")
-        author  = discord.utils.escape_markdown(str(msg.author))
+        ts = msg.created_at.strftime("%d/%m/%Y %H:%M:%S")
+        author = discord.utils.escape_markdown(str(msg.author))
         content = msg.content.replace("<", "&lt;").replace(">", "&gt;") or "<em>embed/fichier</em>"
         messages.append(f'<tr><td class="ts">{ts}</td><td class="author">{author}</td><td>{content}</td></tr>')
     rows = "\n".join(messages)
@@ -37,6 +27,7 @@ td{{padding:6px 12px;border-bottom:1px solid #313244;vertical-align:top}}
 <table><thead><tr><th>Horodatage</th><th>Auteur</th><th>Message</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
 
+
 async def send_ticket_log(guild, ticket_channel, closer):
     ch = await get_log_channel(guild)
     if not ch:
@@ -44,9 +35,9 @@ async def send_ticket_log(guild, ticket_channel, closer):
     html = await generate_transcript(ticket_channel)
     file = discord.File(fp=io.BytesIO(html.encode("utf-8")), filename=f"transcript-{ticket_channel.name}.html")
     embed = discord.Embed(title="📁 Ticket fermé", color=0x9B59B6, timestamp=now_utc())
-    embed.add_field(name="🎫 Ticket",    value=ticket_channel.name, inline=True)
-    embed.add_field(name="👤 Fermé par", value=closer.mention,      inline=True)
-    embed.add_field(name="🕐 Date",      value=now_str(),            inline=True)
+    embed.add_field(name="🎫 Ticket", value=ticket_channel.name, inline=True)
+    embed.add_field(name="👤 Fermé par", value=closer.mention, inline=True)
+    embed.add_field(name="🕐 Date", value=now_str(), inline=True)
     try:
         await ch.send(embed=embed, file=file)
     except Exception as e:

@@ -1,20 +1,9 @@
-import asyncio
-import io
-import os
-import re
-import time
-import json
-import random
-import sqlite3
-import difflib
-from datetime import datetime, timezone
-from collections import defaultdict
-from pathlib import Path
-
 import discord
-from discord.ext import commands
 
 from bot.core import bot
+from bot.utils.helpers import now_utc
+from bot.utils.logs import send_log
+
 
 @bot.event
 async def on_guild_channel_create(channel):
@@ -23,6 +12,7 @@ async def on_guild_channel_create(channel):
     embed.add_field(name="📂 Type", value=str(channel.type), inline=True)
     embed.add_field(name="🗂️ Catégorie", value=channel.category.name if channel.category else "Aucune", inline=True)
     await send_log(channel.guild, embed)
+
 
 @bot.event
 async def on_guild_channel_delete(channel):

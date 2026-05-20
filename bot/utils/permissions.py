@@ -1,20 +1,7 @@
-import asyncio
-import io
-import os
-import re
-import time
-import json
-import random
-import sqlite3
-import difflib
-from datetime import datetime, timezone
-from collections import defaultdict
-from pathlib import Path
-
 import discord
-from discord.ext import commands
 
-from bot.core import bot
+from bot.utils.config import load_config, resolve_role, resolve_roles
+
 
 def is_staff(member: discord.Member) -> bool:
     if member.guild_permissions.administrator:
@@ -27,13 +14,13 @@ def is_staff(member: discord.Member) -> bool:
 
 
 def is_staff_market(member: discord.Member) -> bool:
-    cfg     = load_config(member.guild.id)
-    role    = resolve_role(member.guild, cfg.get("role_staff_market"))
+    cfg = load_config(member.guild.id)
+    role = resolve_role(member.guild, cfg.get("role_staff_market"))
     vendeur = resolve_role(member.guild, cfg.get("role_vendeur"))
     return (role and role in member.roles) or (vendeur and vendeur in member.roles) or is_staff(member)
 
 
 def is_vendeur(member: discord.Member) -> bool:
-    cfg  = load_config(member.guild.id)
+    cfg = load_config(member.guild.id)
     role = resolve_role(member.guild, cfg.get("role_vendeur"))
     return (role and role in member.roles) or is_staff(member)
