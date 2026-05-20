@@ -1,0 +1,27 @@
+# Secrets
+.env
+.env.*
+*.token
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Données runtime (ne pas versionner la DB ni les configs serveur)
+/app/
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
