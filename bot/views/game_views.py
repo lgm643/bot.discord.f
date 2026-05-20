@@ -17,7 +17,7 @@ from discord.ext import commands
 from bot.core import bot
 
 from bot.core import bot, active_pendu, active_morpion
-from bot.utils.helpers import gk, save_games
+from bot.utils.helpers import gk, save_games, load_user_data, get_user, save_user_data
 from bot.utils.games import (
     PENDU_ART, PENDU_MOTS, build_pendu_embed, build_morpion_embed,
     check_winner, MORPION_EMOJIS, WINS,

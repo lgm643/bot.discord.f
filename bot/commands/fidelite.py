@@ -15,6 +15,9 @@ import discord
 from discord.ext import commands
 
 from bot.core import bot
+from bot.utils.helpers import (
+    load_user_data, get_user, save_user_data, xp_for_level, progress_bar, now_utc,
+)
 
 @bot.command(name="level", aliases=["lvl", "xp"])
 async def level_cmd(ctx, member: discord.Member = None):

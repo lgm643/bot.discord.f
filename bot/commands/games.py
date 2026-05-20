@@ -20,6 +20,7 @@ from bot.views.game_views import PenduView, MorpionView
 from bot.core import active_pendu, active_morpion, pendu_tasks, morpion_tasks
 from bot.utils.helpers import gk, save_games
 from bot.utils.games import _start_pendu_timer, _start_morpion_timer, _update_pendu, _end_pendu, build_pendu_embed, build_morpion_embed
+from bot.utils.permissions import is_staff
 
 @bot.command(name="pendu")
 async def pendu_cmd(ctx):

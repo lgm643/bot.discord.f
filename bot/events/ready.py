@@ -32,6 +32,7 @@ async def on_ready():
 
     print(f"[BOT] Connecté : {bot.user} (ID: {bot.user.id})")
     print(f"[BOT] Serveurs : {[g.name for g in bot.guilds]}")
+    print("[BOT] Build: import-fix-r2 (2026-05-20)")
 
     # Toujours réenregistrer les vues persistantes (nécessaire après reconnexion)
     bot.add_view(TicketView())

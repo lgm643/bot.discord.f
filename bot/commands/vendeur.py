@@ -18,6 +18,11 @@ from bot.core import bot
 
 from bot.views.vendeur_view import VendeurView
 from bot.modals.vendeur_modal import VendeurModal
+from bot.utils.permissions import is_staff
+from bot.utils.config import cfg_channel, cfg_role
+from bot.utils.helpers import now_utc
+from bot.utils.logs import send_log
+from bot.utils.tickets import send_ticket_log
 
 @bot.command(name="vendeur")
 async def vendeur_cmd(ctx):

@@ -15,6 +15,8 @@ import discord
 from discord.ext import commands
 
 from bot.core import bot
+from bot.utils.helpers import load_user_data, now_utc
+from bot.utils.config import load_config
 
 @bot.command(name="classement", aliases=["top", "leaderboard", "lb", "rang", "ranking"])
 async def classement_cmd(ctx):

@@ -17,7 +17,7 @@ from discord.ext import commands
 from bot.core import bot
 
 from bot.core import CATALOGUE_DIR, _catalogue_msg_ids, _commande_msg_ids, _catalogue_lock
-from bot.utils.config import cfg_channel, load_config, resolve_channel
+from bot.utils.config import cfg_channel, cfg_role, load_config, resolve_channel
 from bot.utils.helpers import now_utc
 
 def _item_key(nom: str, vendeur_id: int) -> str:

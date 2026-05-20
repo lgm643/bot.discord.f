@@ -15,6 +15,8 @@ import discord
 from discord.ext import commands
 
 from bot.core import bot
+from bot.utils.helpers import now_utc
+from bot.utils.market import load_catalogue, fuzzy_search
 
 class CommandeRechercheModal(discord.ui.Modal, title="🔍 Rechercher un article"):
     terme = discord.ui.TextInput(label="Nom ou mots-clés", placeholder="ex: paladium", max_length=50)

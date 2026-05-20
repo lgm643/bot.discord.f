@@ -21,7 +21,7 @@ from bot.utils.market import (
     load_catalogue, fuzzy_search, _clean_ghost_items,
     update_catalogue_message, send_notif, _parse_prix_num,
 )
-from bot.utils.config import cfg_category, cfg_channel, load_config
+from bot.utils.config import cfg_category, cfg_channel, cfg_role, load_config
 from bot.utils.permissions import is_staff, is_vendeur
 from bot.utils.helpers import now_utc
 from bot.utils.logs import send_log
