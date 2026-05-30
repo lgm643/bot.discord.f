@@ -1,5 +1,6 @@
 import discord
-
+from pathlib import Path
+import json
 from bot.core import bot
 
 from bot.core import CATALOGUE_DIR, _catalogue_msg_ids, _commande_msg_ids, _catalogue_lock
