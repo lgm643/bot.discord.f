@@ -103,11 +103,6 @@ def _build_weekly_embeds(
     main.add_field(name="━━━━━━━━━━━━━━━━━━\n🎙️ Top Vocal",     value=rankings["top_vocal"],    inline=False)
     embeds.append(main)
 
-    # ── Embed 2 : invitations / ventes ────────────────────────────────────
-    second = discord.Embed(color=0xF1C40F, timestamp=now_utc())
-    second.add_field(name="━━━━━━━━━━━━━━━━━━\n📨 Top Invitations", value=rankings["top_invites"], inline=False)
-    second.add_field(name="━━━━━━━━━━━━━━━━━━\n🛒 Top Vendeurs",    value=rankings["top_ventes"],  inline=False)
-    embeds.append(second)
 
     # ── Embed 3 : membres de la semaine (si activé) ───────────────────────
     if motd_enabled(cfg):
@@ -140,8 +135,8 @@ def _build_weekly_embeds(
                 name="🎙️ Meilleur actif — Vocal",
                 value=(
                     f"🎉 {motd_vocal.mention}\n"
-                    f"Le membre qui a passé le plus de temps en vocal cette semaine !\n"
-                    f"Toujours là pour la commu 🎙️"
+                    f"🏆 Champion vocal de la semaine !\n"
+                    f"Avec un temps record passé en vocal, il décroche la première place 🎙️"
                 ),
                 inline=False,
             )
