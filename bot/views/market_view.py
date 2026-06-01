@@ -1,3 +1,4 @@
+import asyncio
 import discord
 
 from bot.core import bot
