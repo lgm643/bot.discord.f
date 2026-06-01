@@ -101,7 +101,6 @@ def _build_weekly_embeds(
         main.set_thumbnail(url=guild.icon.url)
     main.add_field(name="━━━━━━━━━━━━━━━━━━\n💬 Top Messages",  value=rankings["top_messages"], inline=False)
     main.add_field(name="━━━━━━━━━━━━━━━━━━\n🎙️ Top Vocal",     value=rankings["top_vocal"],    inline=False)
-    main.add_field(name="━━━━━━━━━━━━━━━━━━\n⭐ Top XP",        value=rankings["top_xp"],       inline=False)
     embeds.append(main)
 
     # ── Embed 2 : invitations / ventes ────────────────────────────────────
