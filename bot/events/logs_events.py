@@ -525,23 +525,22 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         # Déconnexion
         dur = now_ts - _voice_join_times.pop(key, now_ts)
         # Vérifier si déconnexion forcée via audit log
-        # Attendre 2s puis lire l'audit log member_disconnect
-        # Si une entrée récente existe ET qu'elle ne vient pas du membre lui-même
-        # ET que le timestamp coïncide avec la déconnexion → c'est un kick forcé
+        # DEBUG : détecter déconnexion forcée
         await asyncio.sleep(2.0)
         force_auteur = None
         try:
             async for entry in member.guild.audit_logs(
-                limit=3, action=discord.AuditLogAction.member_disconnect
+                limit=5, action=discord.AuditLogAction.member_disconnect
             ):
                 age = (discord.utils.utcnow() - entry.created_at).total_seconds()
-                # Entrée de moins de 4s ET pas le membre lui-même
-                if age < 4 and entry.user and entry.user.id != uid:
+                print(f"[DEBUG-DISCONNECT] user={entry.user} target={entry.target} age={age:.1f}s count={getattr(entry.extra, 'count', '?')}")
+                if age < 5 and entry.user and entry.user.id != uid:
                     force_auteur = entry.user
                     break
         except Exception as e:
             print(f"[LOG] Erreur audit disconnect : {e}")
 
+        print(f"[DEBUG-DISCONNECT] membre={member} force_auteur={force_auteur}")
         if force_auteur:
             embed = log_vocal_force_disconnect(member, before.channel, force_auteur)
         else:
