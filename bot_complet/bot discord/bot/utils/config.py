@@ -77,7 +77,14 @@ DEFAULT_CONFIG = {
     "role_motd_msg":     "",
     "role_motd_vocal":   "",
     # ── Inactivité vocale ──────────────────────────────────────────────────────
-    "vocal_inactivity_enabled":          False,  # Activer/désactiver le système
+    "salon_logs_messages":               "",
+    "salon_logs_membres":                "",
+    "salon_logs_vocal":                  "",
+    "salon_logs_serveur":                "",
+    "salon_logs_securite":               "",
+    "salon_logs_debug":                  "",
+    "debug_enabled":                     False,
+    "vocal_inactivity_enabled":          False,
     "vocal_inactivity_delay":            15,     # Délai en minutes avant expulsion
     "vocal_inactivity_exempt_channels":  [],     # Salons vocaux exclus (IDs ou noms)
     "vocal_inactivity_exempt_roles":     [],     # Rôles exclus (IDs ou noms)

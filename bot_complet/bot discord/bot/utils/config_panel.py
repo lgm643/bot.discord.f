@@ -151,3 +151,15 @@ def _build_group_embed(guild, group):
     if lines:
         embed.add_field(name="\u200b", value="\n".join(lines), inline=False)
     return embed
+
+# Groupe ajouté dynamiquement dans CONFIG_GROUPS
+CONFIG_GROUPS["📜 Salons de logs"] = [
+    ("salon_logs",           "📜 Logs modération (défaut)",              False),
+    ("salon_logs_messages",  "💬 Logs messages (edit/delete/bulk)",      False),
+    ("salon_logs_membres",   "👥 Logs membres (join/leave/rôles/nick)",  False),
+    ("salon_logs_vocal",     "🔊 Logs vocal (join/leave/état)",          False),
+    ("salon_logs_serveur",   "⚙️ Logs serveur (salons/rôles/emojis)",    False),
+    ("salon_logs_securite",  "🚨 Alertes sécurité",                      False),
+    ("salon_logs_debug",     "🐛 Logs debug (erreurs Python/API)",       False),
+    ("debug_enabled",        "🐛 Activer debug (1=oui / 0=non)",         False),
+]
