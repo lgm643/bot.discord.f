@@ -525,9 +525,21 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         dur = now_ts - _voice_join_times.pop(key, now_ts)
         # Vérifier si déconnexion forcée via audit log
         await asyncio.sleep(3.0)
-        entry = await _audit(member.guild, discord.AuditLogAction.member_disconnect, uid)
-        if entry and entry.user and entry.user.id != uid:
-            embed = log_vocal_force_disconnect(member, before.channel, entry.user)
+        # member_disconnect : target = salon, pas le membre
+        # On cherche sans filtre target_id et on vérifie manuellement
+        force_auteur = None
+        try:
+            async for entry in member.guild.audit_logs(
+                limit=5, action=discord.AuditLogAction.member_disconnect
+            ):
+                age = (discord.utils.utcnow() - entry.created_at).total_seconds()
+                if age < 6 and entry.user and entry.user.id != uid:
+                    force_auteur = entry.user
+                    break
+        except Exception as e:
+            print(f"[LOG] Erreur audit disconnect : {e}")
+        if force_auteur:
+            embed = log_vocal_force_disconnect(member, before.channel, force_auteur)
         else:
             embed = log_vocal_leave(member, before.channel, dur)
         await send_log(member.guild, embed, category="vocal",
