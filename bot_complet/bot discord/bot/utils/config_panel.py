@@ -1,14 +1,10 @@
-"""utils/config_panel.py — Panneau !config — constantes et embeds.
-
-AJOUTS v2 :
-  - Groupe "🎙️ Inactivité Vocale" ajouté dans CONFIG_GROUPS.
-"""
+"""utils/config_panel.py — Panneau !config — constantes et embeds."""
 import discord
 
 from bot.utils.config import load_config, resolve_channel, resolve_role, resolve_category
 from bot.utils.helpers import now_utc
 
-_NUM_KEYS  = {
+_NUM_KEYS = {
     "alt_min_days", "raid_window_secs", "raid_threshold",
     "spam_limit", "spam_window",
     "vocal_inactivity_delay",
@@ -43,9 +39,9 @@ CONFIG_GROUPS = {
         ("salon_giveaway_logs",  "📜 Logs giveaways / reroll",         False),
     ],
     "📨 Récompenses invitations": [
-        ("inviteRole5",  "🐦‍🔥 Rôle palier 5 invitations (Initié)",         False),
-        ("inviteRole10", "🐦‍🔥 Rôle palier 10 invitations (Marchand Elite)", False),
-        ("inviteRole20", "🐦‍🔥 Rôle palier 20 invitations (Maître Phénix)",  False),
+        ("inviteRole5",  "🐦 Rôle palier 5 invitations",               False),
+        ("inviteRole10", "🐦 Rôle palier 10 invitations",              False),
+        ("inviteRole20", "🐦 Rôle palier 20 invitations",              False),
     ],
     "🎭 Rôles": [
         ("role_staff",           "👑 Staff / Admin (liste)",            True),
@@ -72,9 +68,9 @@ CONFIG_GROUPS = {
     ],
     "📊 Stats & Hebdo": [
         ("salon_hebdo",      "📅 Salon classement hebdomadaire",        False),
-        ("motd_enabled",     "👑 Activer Membres de la semaine (1=oui / 0=non)", False),
-        ("role_motd_msg",    "💬 Rôle Membre de la semaine — Messages", False),
-        ("role_motd_vocal",  "🎙️ Rôle Membre de la semaine — Vocal",   False),
+        ("motd_enabled",     "👑 Activer Membres de la semaine (1/0)",  False),
+        ("role_motd_msg",    "💬 Rôle Membre semaine — Messages",       False),
+        ("role_motd_vocal",  "🎙️ Rôle Membre semaine — Vocal",         False),
     ],
     "⚙️ Sécurité": [
         ("alt_min_days",      "🛡️ Anti-alt : âge minimum (jours)",     False),
@@ -83,20 +79,23 @@ CONFIG_GROUPS = {
         ("spam_limit",        "⚡ Anti-spam : messages max",            False),
         ("spam_window",       "⚡ Anti-spam : fenêtre (secondes)",      False),
     ],
-    # ── NOUVEAU GROUPE ─────────────────────────────────────────────────────────
     "🎙️ Inactivité Vocale": [
-        ("vocal_inactivity_enabled",
-         "🔘 Activer le système (1=oui / 0=non)",                       False),
-        ("vocal_inactivity_delay",
-         "⏱️ Délai d'inactivité avant expulsion (minutes)",             False),
-        ("salon_logs_vocal_inactivity",
-         "📜 Salon logs dédié (vide = salon_logs principal)",            False),
-        ("vocal_inactivity_exempt_channels",
-         "🔕 Salons vocaux exclus (liste d'IDs ou noms)",               True),
-        ("vocal_inactivity_exempt_roles",
-         "🛡️ Rôles exclus de l'expulsion (liste)",                     True),
-        ("vocal_inactivity_exempt_users",
-         "👤 Membres exclus de l'expulsion (liste d'IDs)",              True),
+        ("vocal_inactivity_enabled",         "🔘 Activer (1=oui / 0=non)",                    False),
+        ("vocal_inactivity_delay",           "⏱️ Délai avant expulsion (minutes)",            False),
+        ("salon_logs_vocal_inactivity",      "📜 Salon logs dédié (vide = salon_logs)",       False),
+        ("vocal_inactivity_exempt_channels", "🔕 Salons vocaux exclus (liste)",               True),
+        ("vocal_inactivity_exempt_roles",    "🛡️ Rôles exclus (liste)",                      True),
+        ("vocal_inactivity_exempt_users",    "👤 Membres exclus — IDs (liste)",               True),
+    ],
+    "📜 Salons de logs": [
+        ("salon_logs",           "📜 Logs modération (défaut fallback)", False),
+        ("salon_logs_messages",  "💬 Logs messages (edit/delete/bulk)",  False),
+        ("salon_logs_membres",   "👥 Logs membres (join/leave/rôles)",   False),
+        ("salon_logs_vocal",     "🔊 Logs vocal (join/leave/état)",      False),
+        ("salon_logs_serveur",   "⚙️ Logs serveur (salons/rôles/emojis)",False),
+        ("salon_logs_securite",  "🚨 Alertes sécurité",                  False),
+        ("salon_logs_debug",     "🐛 Logs debug (erreurs Python/API)",   False),
+        ("debug_enabled",        "🐛 Activer debug (1=oui / 0=non)",     False),
     ],
 }
 
@@ -127,8 +126,8 @@ def _fmt_cfg_val(guild, key, val):
 
 
 def _build_group_embed(guild, group):
-    cfg  = load_config(guild.id)
-    keys = CONFIG_GROUPS[group]
+    cfg   = load_config(guild.id)
+    keys  = CONFIG_GROUPS[group]
     embed = discord.Embed(
         title=f"⚙️ Config — {group}",
         description=(
@@ -152,14 +151,17 @@ def _build_group_embed(guild, group):
         embed.add_field(name="\u200b", value="\n".join(lines), inline=False)
     return embed
 
-# Groupe ajouté dynamiquement dans CONFIG_GROUPS
-CONFIG_GROUPS["📜 Salons de logs"] = [
-    ("salon_logs",           "📜 Logs modération (défaut)",              False),
-    ("salon_logs_messages",  "💬 Logs messages (edit/delete/bulk)",      False),
-    ("salon_logs_membres",   "👥 Logs membres (join/leave/rôles/nick)",  False),
-    ("salon_logs_vocal",     "🔊 Logs vocal (join/leave/état)",          False),
-    ("salon_logs_serveur",   "⚙️ Logs serveur (salons/rôles/emojis)",    False),
-    ("salon_logs_securite",  "🚨 Alertes sécurité",                      False),
-    ("salon_logs_debug",     "🐛 Logs debug (erreurs Python/API)",       False),
-    ("debug_enabled",        "🐛 Activer debug (1=oui / 0=non)",         False),
-]
+
+def _build_home_embed(guild):
+    embed = discord.Embed(
+        title="⚙️ Configuration du serveur",
+        description=(
+            "Choisissez une **catégorie** dans le menu déroulant pour voir et modifier les valeurs.\n\n"
+            + "\n".join(f"**{g}** — {len(v)} clé(s)" for g, v in CONFIG_GROUPS.items())
+            + "\n\n⚠️ = introuvable sur ce serveur"
+        ),
+        color=0x9B59B6,
+        timestamp=now_utc(),
+    )
+    embed.set_footer(text="Timeout automatique après 5 minutes")
+    return embed
