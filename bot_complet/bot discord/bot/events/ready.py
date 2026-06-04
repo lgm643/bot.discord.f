@@ -142,6 +142,8 @@ async def on_ready():
         asyncio.create_task(invite_rewards_sync_loop())
         from bot.events.weekly import weekly_loop
         asyncio.create_task(weekly_loop())
+        from bot.utils.voice_inactivity import voice_inactivity_loop
+        asyncio.create_task(voice_inactivity_loop(bot))
         print("[BOT] Prêt !")
     else:
         await _restore_active_giveaway_views()
