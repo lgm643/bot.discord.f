@@ -1,1 +1,0 @@
-"""La Mystic Discord bot."""
