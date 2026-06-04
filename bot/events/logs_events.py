@@ -524,7 +524,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         # Déconnexion
         dur = now_ts - _voice_join_times.pop(key, now_ts)
         # Vérifier si déconnexion forcée via audit log
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(3.0)
         entry = await _audit(member.guild, discord.AuditLogAction.member_disconnect, uid)
         if entry and entry.user and entry.user.id != uid:
             embed = log_vocal_force_disconnect(member, before.channel, entry.user)
