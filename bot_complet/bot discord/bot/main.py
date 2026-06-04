@@ -20,6 +20,7 @@ import bot.commands.config_cmd   # noqa: F401
 import bot.commands.games        # noqa: F401
 import bot.commands.avantages    # noqa: F401
 import bot.commands.stats        # noqa: F401
+import bot.events.logs_events
 
 import bot.events.invite_events  # noqa: F401
 import bot.events.message        # noqa: F401

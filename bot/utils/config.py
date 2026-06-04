@@ -1,8 +1,9 @@
 """
 utils/config.py — Configuration par guild avec cache en mémoire TTL 30s.
 
-CORRECTION : load_config() lit désormais depuis le cache en mémoire pendant 30s.
-Plus d'appels open()+json.load() à chaque vérification de permission.
+AJOUTS v2 :
+  - Nouvelles clés pour le système d'inactivité vocale dans DEFAULT_CONFIG.
+  - Nouveau groupe "🎙️ Inactivité Vocale" dans CONFIG_GROUPS (config_panel.py).
 """
 import json
 import time
@@ -71,10 +72,24 @@ DEFAULT_CONFIG = {
     "role_giveaway_staff":   "",
     "salon_giveaway_logs":   "",
     # ── Stats & Hebdo ──────────────────────────────────────────────────────────
-    "salon_hebdo":       "",      # salon d'envoi du classement hebdomadaire
-    "motd_enabled":      True,    # activer les Membres de la semaine
-    "role_motd_msg":     "",      # rôle Membre de la semaine Messages
-    "role_motd_vocal":   "",      # rôle Membre de la semaine Vocal
+    "salon_hebdo":       "",
+    "motd_enabled":      True,
+    "role_motd_msg":     "",
+    "role_motd_vocal":   "",
+    # ── Inactivité vocale ──────────────────────────────────────────────────────
+    "salon_logs_messages":               "",
+    "salon_logs_membres":                "",
+    "salon_logs_vocal":                  "",
+    "salon_logs_serveur":                "",
+    "salon_logs_securite":               "",
+    "salon_logs_debug":                  "",
+    "debug_enabled":                     False,
+    "vocal_inactivity_enabled":          False,
+    "vocal_inactivity_delay":            15,     # Délai en minutes avant expulsion
+    "vocal_inactivity_exempt_channels":  [],     # Salons vocaux exclus (IDs ou noms)
+    "vocal_inactivity_exempt_roles":     [],     # Rôles exclus (IDs ou noms)
+    "vocal_inactivity_exempt_users":     [],     # Membres exclus (IDs)
+    "salon_logs_vocal_inactivity":       "",     # Salon logs dédié (vide = salon_logs)
 }
 
 
@@ -168,8 +183,8 @@ def resolve_category(guild: discord.Guild, name_or_id) -> discord.CategoryChanne
     )
 
 
-def cfg_role(guild, key):    return resolve_role(guild, load_config(guild.id).get(key))
-def cfg_roles(guild, key):   return resolve_roles(guild, load_config(guild.id).get(key, []))
-def cfg_channel(guild, key): return resolve_channel(guild, load_config(guild.id).get(key))
-def cfg_channels(guild, key):return resolve_channels(guild, load_config(guild.id).get(key, []))
-def cfg_category(guild, key):return resolve_category(guild, load_config(guild.id).get(key))
+def cfg_role(guild, key):     return resolve_role(guild, load_config(guild.id).get(key))
+def cfg_roles(guild, key):    return resolve_roles(guild, load_config(guild.id).get(key, []))
+def cfg_channel(guild, key):  return resolve_channel(guild, load_config(guild.id).get(key))
+def cfg_channels(guild, key): return resolve_channels(guild, load_config(guild.id).get(key, []))
+def cfg_category(guild, key): return resolve_category(guild, load_config(guild.id).get(key))

@@ -1,12 +1,16 @@
 """
 events/ready.py — on_ready et boucles périodiques.
 
-CORRECTIONS :
-  - Ajout de la boucle flush_user_data_all() toutes les 60s
-  - Boucle _auto_refresh_loop déjà à 60s dans restore.py
-  - Ajout de la boucle de flush des données XP utilisateur
+CORRECTIONS v2 :
+  [1] _flush_user_data_loop appelle désormais `await flush_user_data_all()`
+      (la version async non-bloquante) au lieu de la version synchrone.
+  [2] _restore_active_giveaway_views replanifie aussi les timers des giveaways
+      encore actifs après un redémarrage — ils ne sont plus perdus.
+  [3] Les bot.add_view() des vues persistantes sont protégés par un try/except
+      individuel pour ne pas bloquer le démarrage si une vue est invalide.
 """
 import asyncio
+import time
 
 import discord
 
@@ -28,23 +32,50 @@ from bot.utils.config import load_config
 from bot.utils.market import load_catalogue, _clean_ghost_items
 
 
-def _restore_active_giveaway_views():
-    for msg_id in list(active_giveaways.keys()):
+async def _restore_active_giveaway_views():
+    """Restaure les vues ET replanifie les timers des giveaways encore actifs."""
+    from bot.commands.giveaway import _end_giveaway
+
+    for msg_id, gw in list(active_giveaways.items()):
+        # Restaurer la vue interactive
         try:
             bot.add_view(GiveawayView(msg_id))
             print(f"[GIVEAWAY] Vue restaurée pour msg_id={msg_id}")
         except Exception as e:
             print(f"[GIVEAWAY] Erreur restauration vue msg_id={msg_id} : {e}")
 
+        # Replanifier le timer de fin
+        ends_at   = gw.get("ends_at", 0)
+        remaining = ends_at - time.time()
+        channel_id = gw.get("channel_id")
+        reward     = gw.get("reward", "?")
+
+        if remaining <= 0:
+            # Le giveaway aurait déjà dû se terminer — le clore immédiatement
+            remaining = 1
+
+        channel = None
+        guild_id = gw.get("guild_id")
+        if guild_id and channel_id:
+            guild = bot.get_guild(guild_id)
+            if guild:
+                channel = guild.get_channel(channel_id)
+
+        if channel:
+            asyncio.create_task(_end_giveaway(msg_id, remaining, channel, reward))
+            print(f"[GIVEAWAY] Timer restauré pour msg_id={msg_id}, remaining={int(remaining)}s")
+        else:
+            print(f"[GIVEAWAY] ⚠️ Salon introuvable pour giveaway msg_id={msg_id} — timer non restauré")
+
 
 async def _flush_user_data_loop():
-    """Flush les données XP sur disque toutes les 60s."""
+    """Flush les données XP sur disque toutes les 60s — version async non-bloquante."""
     from bot.utils.helpers import flush_user_data_all
     print(f"[FLUSH] Boucle flush user_data démarrée ({USER_DATA_FLUSH_INTERVAL}s)")
     while not bot.is_closed():
         await asyncio.sleep(USER_DATA_FLUSH_INTERVAL)
         try:
-            flush_user_data_all()
+            await flush_user_data_all()   # [1] await obligatoire
         except Exception as e:
             print(f"[FLUSH] Erreur : {e}")
 
@@ -54,12 +85,18 @@ async def on_ready():
     print(f"[BOT] Connecté : {bot.user} (ID: {bot.user.id})")
     print(f"[BOT] Serveurs : {[g.name for g in bot.guilds]}")
 
-    # Vues persistantes — obligatoires après chaque (re)connexion
-    bot.add_view(TicketView())
-    bot.add_view(RoleToggleView())
-    bot.add_view(VendeurView())
-    bot.add_view(ObjectifView(guild_id=0))
-    bot.add_view(CatalogueView())
+    # Vues persistantes — chaque add_view est isolé pour ne pas bloquer le démarrage
+    for view_cls, kwargs in [
+        (TicketView,   {}),
+        (RoleToggleView, {}),
+        (VendeurView,  {}),
+        (ObjectifView, {"guild_id": 0}),
+        (CatalogueView, {}),
+    ]:
+        try:
+            bot.add_view(view_cls(**kwargs))
+        except Exception as e:
+            print(f"[READY] Erreur add_view {view_cls.__name__} : {e}")
 
     for guild in bot.guilds:
         try:
@@ -70,8 +107,11 @@ async def on_ready():
         except Exception as e:
             print(f"[READY] CommandeView erreur guild={guild.id} : {e}")
 
-    from bot.views.market_view import VenduView
-    bot.add_view(VenduView(guild_id=0, vendeur_id=0, nom_key="", quantite=0, ticket_channel_id=0))
+    try:
+        from bot.views.market_view import VenduView
+        bot.add_view(VenduView(guild_id=0, vendeur_id=0, nom_key="", quantite=0, ticket_channel_id=0))
+    except Exception as e:
+        print(f"[READY] Erreur add_view VenduView : {e}")
 
     await init_invite_cache()
 
@@ -85,7 +125,8 @@ async def on_ready():
         from bot.events.restore import _restore_all_giveaways
         await _restore_all_giveaways()
 
-        _restore_active_giveaway_views()
+        # [2] Restaure vues ET timers des giveaways actifs
+        await _restore_active_giveaway_views()
 
         for guild in bot.guilds:
             load_config(guild.id)
@@ -101,7 +142,9 @@ async def on_ready():
         asyncio.create_task(invite_rewards_sync_loop())
         from bot.events.weekly import weekly_loop
         asyncio.create_task(weekly_loop())
+        from bot.utils.voice_inactivity import voice_inactivity_loop
+        asyncio.create_task(voice_inactivity_loop(bot))
         print("[BOT] Prêt !")
     else:
-        _restore_active_giveaway_views()
-        print("[BOT] Reconnexion détectée — restauration ignorée (déjà effectuée)")
+        await _restore_active_giveaway_views()
+        print("[BOT] Reconnexion détectée — restauration des vues uniquement")
