@@ -63,7 +63,7 @@ async def _audit(guild: discord.Guild, action: discord.AuditLogAction, target_id
 
 @bot.event
 async def on_guild_role_create(role: discord.Role):
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     entry   = await _audit(role.guild, discord.AuditLogAction.role_create, role.id)
     auteur  = entry.user if entry else None
     embed   = log_role_create(role, auteur)
@@ -79,7 +79,7 @@ async def on_guild_role_create(role: discord.Role):
 
 @bot.event
 async def on_guild_role_delete(role: discord.Role):
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     entry  = await _audit(role.guild, discord.AuditLogAction.role_delete, role.id)
     auteur = entry.user if entry else None
     embed  = log_role_delete(role, auteur)
@@ -92,7 +92,7 @@ async def on_guild_role_update(before: discord.Role, after: discord.Role):
        and before.permissions == after.permissions and before.hoist == after.hoist \
        and before.mentionable == after.mentionable:
         return
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     entry  = await _audit(after.guild, discord.AuditLogAction.role_update, after.id)
     auteur = entry.user if entry else None
     embed  = log_role_update(before, after, auteur)
@@ -117,7 +117,7 @@ async def on_guild_role_update(before: discord.Role, after: discord.Role):
 
 @bot.event
 async def on_guild_channel_create(channel: discord.abc.GuildChannel):
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     entry  = await _audit(channel.guild, discord.AuditLogAction.channel_create, channel.id)
     auteur = entry.user if entry else None
     embed  = log_channel_create(channel, auteur)
@@ -137,7 +137,7 @@ async def on_guild_channel_create(channel: discord.abc.GuildChannel):
 
 @bot.event
 async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     entry  = await _audit(channel.guild, discord.AuditLogAction.channel_delete, channel.id)
     auteur = entry.user if entry else None
     embed  = log_channel_delete(channel, auteur)
@@ -165,7 +165,7 @@ async def on_guild_channel_update(before: discord.abc.GuildChannel, after: disco
        and getattr(before, "user_limit", None) == getattr(after, "user_limit", None) \
        and before.category == after.category:
         return
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     entry  = await _audit(after.guild, discord.AuditLogAction.channel_update, after.id)
     auteur = entry.user if entry else None
     embed  = log_channel_update(before, after, auteur)
@@ -184,7 +184,7 @@ async def on_guild_emojis_update(guild: discord.Guild, before: list, after: list
     # Créés
     for emoji in after:
         if emoji.id not in before_ids:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.5)
             entry  = await _audit(guild, discord.AuditLogAction.emoji_create, emoji.id)
             auteur = entry.user if entry else None
             await send_log(guild, log_emoji("créé", emoji, auteur), category="serveur",
@@ -193,7 +193,7 @@ async def on_guild_emojis_update(guild: discord.Guild, before: list, after: list
     # Supprimés
     for emoji in before:
         if emoji.id not in after_ids:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.5)
             entry  = await _audit(guild, discord.AuditLogAction.emoji_delete, emoji.id)
             auteur = entry.user if entry else None
             await send_log(guild, log_emoji("supprimé", emoji, auteur), category="serveur",
@@ -218,7 +218,7 @@ async def on_guild_stickers_update(guild: discord.Guild, before: list, after: li
 
     for s in after:
         if s.id not in before_ids:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.5)
             entry  = await _audit(guild, discord.AuditLogAction.sticker_create, s.id)
             auteur = entry.user if entry else None
             await send_log(guild, log_sticker("créé", s, auteur), category="serveur",
@@ -226,7 +226,7 @@ async def on_guild_stickers_update(guild: discord.Guild, before: list, after: li
 
     for s in before:
         if s.id not in after_ids:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.5)
             entry  = await _audit(guild, discord.AuditLogAction.sticker_delete, s.id)
             auteur = entry.user if entry else None
             await send_log(guild, log_sticker("supprimé", s, auteur), category="serveur",
@@ -245,7 +245,7 @@ async def on_guild_stickers_update(guild: discord.Guild, before: list, after: li
 
 @bot.event
 async def on_webhooks_update(channel: discord.TextChannel):
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     guild = channel.guild
     for action, label in [
         (discord.AuditLogAction.webhook_create,  "créé"),
@@ -274,7 +274,7 @@ async def on_invite_create(invite: discord.Invite):
 
 @bot.event
 async def on_invite_delete(invite: discord.Invite):
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     entry  = await _audit(invite.guild, discord.AuditLogAction.invite_delete)
     auteur = entry.user if entry else None
     embed  = log_invite("supprimée", invite, auteur)
@@ -294,7 +294,7 @@ async def on_guild_update(before: discord.Guild, after: discord.Guild):
        and before.afk_channel == after.afk_channel \
        and before.owner == after.owner:
         return
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     entry  = await _audit(after, discord.AuditLogAction.guild_update)
     auteur = entry.user if entry else None
     embed  = log_guild_update(before, after, auteur)
@@ -357,7 +357,7 @@ async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent)
     channel = guild.get_channel(payload.channel_id)
     if not channel:
         return
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     entry  = await _audit(guild, discord.AuditLogAction.message_bulk_delete)
     auteur = entry.user if entry else None
 
@@ -419,7 +419,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     added   = set(after.roles)  - set(before.roles)
     removed = set(before.roles) - set(after.roles)
     if added or removed:
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.5)
         entry = await _audit(after.guild, discord.AuditLogAction.member_role_update, after.id)
         mod   = entry.user if entry else None
         embed = log_roles_modifies(after, added, removed, mod)
@@ -442,7 +442,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
     # Timeout
     if before.timed_out_until != after.timed_out_until:
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.5)
         entry = await _audit(after.guild, discord.AuditLogAction.member_update, after.id)
         mod   = entry.user if entry else after.guild.me
         embed = log_timeout_member(mod, after, before.timed_out_until, after.timed_out_until)
@@ -462,7 +462,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
 @bot.event
 async def on_member_unban(guild: discord.Guild, user: discord.User):
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1.5)
     from bot.utils.logs import log_unban
     entry  = await _audit(guild, discord.AuditLogAction.unban, user.id)
     mod    = entry.user if entry else guild.me
@@ -524,7 +524,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         # Déconnexion
         dur = now_ts - _voice_join_times.pop(key, now_ts)
         # Vérifier si déconnexion forcée via audit log
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.5)
         entry = await _audit(member.guild, discord.AuditLogAction.member_disconnect, uid)
         if entry and entry.user and entry.user.id != uid:
             embed = log_vocal_force_disconnect(member, before.channel, entry.user)
@@ -535,7 +535,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
     elif before.channel is not None and after.channel is not None and before.channel != after.channel:
         # Déplacement
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.5)
         entry     = await _audit(member.guild, discord.AuditLogAction.member_move, uid)
         deplaceur = entry.user if (entry and entry.user and entry.user.id != uid) else None
         embed     = log_vocal_move(member, before.channel, after.channel, deplaceur)
@@ -549,7 +549,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
         if before.mute != after.mute:
             if after.mute:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.5)
                 entry = await _audit(member.guild, discord.AuditLogAction.member_update, uid)
                 aut   = entry.user if (entry and entry.user and entry.user.id != uid) else None
                 states.append(("Mute serveur", aut))
@@ -558,7 +558,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
         if before.deaf != after.deaf:
             if after.deaf:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.5)
                 entry = await _audit(member.guild, discord.AuditLogAction.member_update, uid)
                 aut   = entry.user if (entry and entry.user and entry.user.id != uid) else None
                 states.append(("Sourd serveur", aut))
@@ -618,7 +618,7 @@ def _check_dangerous_perms_diff(before: discord.Permissions, after: discord.Perm
 async def on_member_ban(guild: discord.Guild, user: discord.User):
     _record_action(guild.id, "ban")
     if _is_abuse(guild.id, "ban", threshold=4, window=10):
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.5)
         entry  = await _audit(guild, discord.AuditLogAction.ban, user.id)
         auteur = entry.user if entry else None
         alert  = log_security_alert(
