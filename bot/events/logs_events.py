@@ -25,6 +25,7 @@ import discord
 
 from bot.core import bot
 from bot.utils.logs import (
+    _get_log_channel,
     send_log, send_debug,
     log_role_create, log_role_delete, log_role_update,
     log_channel_create, log_channel_delete, log_channel_update,
@@ -524,26 +525,36 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         # Déconnexion
         dur = now_ts - _voice_join_times.pop(key, now_ts)
         # Vérifier si déconnexion forcée via audit log
+        # Envoyer d'abord le log normal, puis vérifier si c'était un kick forcé
+        ch = await _get_log_channel(member.guild, "vocal")
+        embed_leave = log_vocal_leave(member, before.channel, dur)
+        log_msg = None
+        if ch:
+            try:
+                log_msg = await ch.send(embed=embed_leave)
+            except Exception:
+                pass
+
+        # Vérifier après 3s si c'était une déconnexion forcée
         await asyncio.sleep(3.0)
-        # member_disconnect : target = salon, pas le membre
-        # On cherche sans filtre target_id et on vérifie manuellement
         force_auteur = None
         try:
             async for entry in member.guild.audit_logs(
                 limit=5, action=discord.AuditLogAction.member_disconnect
             ):
                 age = (discord.utils.utcnow() - entry.created_at).total_seconds()
-                if age < 6 and entry.user and entry.user.id != uid:
+                if age < 5 and entry.user and entry.user.id != uid:
                     force_auteur = entry.user
                     break
         except Exception as e:
             print(f"[LOG] Erreur audit disconnect : {e}")
-        if force_auteur:
-            embed = log_vocal_force_disconnect(member, before.channel, force_auteur)
-        else:
-            embed = log_vocal_leave(member, before.channel, dur)
-        await send_log(member.guild, embed, category="vocal",
-                       dedup_key=f"vc-leave-{uid}")
+
+        if force_auteur and log_msg:
+            embed_kick = log_vocal_force_disconnect(member, before.channel, force_auteur)
+            try:
+                await log_msg.edit(embed=embed_kick)
+            except Exception:
+                pass
 
     elif before.channel is not None and after.channel is not None and before.channel != after.channel:
         # Déplacement
