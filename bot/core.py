@@ -20,6 +20,7 @@ intents = discord.Intents.default()
 intents.members       = True   # on_member_join/remove/update, get_member()
 intents.message_content = True  # lecture du contenu des messages (préfixe !)
 intents.voice_states  = True   # suivi du temps vocal
+intents.moderation    = True   # lecture de l'Audit Log (kick/ban/move vocal)
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
