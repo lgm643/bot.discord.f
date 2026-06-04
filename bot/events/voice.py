@@ -19,7 +19,7 @@ from bot.utils.voice_inactivity import record_voice_activity, clear_voice_activi
 
 
 @bot.event
-async def on_voice_state_update(member: discord.Member, before: discord.VoiceStateUpdate, after: discord.VoiceStateUpdate):
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
     if member.bot:
         return
 
