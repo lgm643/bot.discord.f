@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 import asyncio
 import discord
