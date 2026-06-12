@@ -1,11 +1,8 @@
 """
 commands/stats.py — Commande !statsserveur
 
-Affiche un embed complet des statistiques du serveur :
-  - Membres (total, en ligne, arrivées)
-  - Activité messages (jour / semaine / mois)
-  - Activité vocale  (jour / semaine / mois)
-  - Classements du jour (top message, xp, vocal)
+CORRECTIONS v3 :
+  - monthly_msgs et monthly_voice affichés "N/D" quand None.
 """
 import discord
 
@@ -14,9 +11,14 @@ from bot.utils.stats import compute_server_stats
 from bot.utils.helpers import fmt_voice, now_utc
 
 
+def _fmt_monthly(value, fmt_fn=None) -> str:
+    if value is None:
+        return "N/D"
+    return fmt_fn(value) if fmt_fn else str(value)
+
+
 @bot.command(name="statsserveur", aliases=["stats", "serverstats", "statistiques"])
 async def statsserveur_cmd(ctx):
-    """Affiche les statistiques complètes du serveur."""
     async with ctx.typing():
         try:
             s = compute_server_stats(ctx.guild)
@@ -32,7 +34,6 @@ async def statsserveur_cmd(ctx):
     if ctx.guild.icon:
         embed.set_thumbnail(url=ctx.guild.icon.url)
 
-    # ── Membres ──────────────────────────────────────────────────────────────
     embed.add_field(
         name="👥 Membres",
         value=(
@@ -43,36 +44,28 @@ async def statsserveur_cmd(ctx):
         ),
         inline=True,
     )
-
-    # ── Messages ──────────────────────────────────────────────────────────────
     embed.add_field(
         name="💬 Messages",
         value=(
             f"**Aujourd'hui :** {s['daily_msgs']}\n"
             f"**Cette semaine :** {s['weekly_msgs']}\n"
-            f"**Ce mois :** ~{s['monthly_msgs']}"
+            f"**Ce mois :** {_fmt_monthly(s['monthly_msgs'])}"
         ),
         inline=True,
     )
-
-    embed.add_field(name="\u200b", value="\u200b", inline=False)   # spacer mobile
-
-    # ── Vocal ─────────────────────────────────────────────────────────────────
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
     embed.add_field(
         name="🎙️ Vocal",
         value=(
             f"**Aujourd'hui :** {fmt_voice(s['daily_voice'])}\n"
             f"**Cette semaine :** {fmt_voice(s['weekly_voice'])}\n"
-            f"**Ce mois :** ~{fmt_voice(s['monthly_voice'])}"
+            f"**Ce mois :** {_fmt_monthly(s['monthly_voice'], fmt_voice)}"
         ),
         inline=True,
     )
-
-    # ── Classements du jour ───────────────────────────────────────────────────
     top_msg_name,   top_msg_val   = s["top_daily_msg"]
     top_xp_name,    top_xp_val    = s["top_daily_xp"]
     top_voice_name, top_voice_val = s["top_daily_voice"]
-
     embed.add_field(
         name="🏆 Tops du jour",
         value=(
@@ -82,6 +75,8 @@ async def statsserveur_cmd(ctx):
         ),
         inline=True,
     )
-
-    embed.set_footer(text=f"Données en temps réel · Demandé par {ctx.author.display_name}")
+    footer = "Données en temps réel · " + ctx.author.display_name
+    if s["monthly_msgs"] is None:
+        footer += " · N/D = données mensuelles non disponibles"
+    embed.set_footer(text=footer)
     await ctx.send(embed=embed)

@@ -25,12 +25,15 @@ import bot.events.invite_events  # noqa: F401
 import bot.events.message        # noqa: F401
 import bot.events.member_join    # noqa: F401
 import bot.events.member_remove  # noqa: F401
-import bot.events.member_update  # noqa: F401
 import bot.events.voice          # noqa: F401
 import bot.events.channels       # noqa: F401
 import bot.events.errors         # noqa: F401
 import bot.events.ready          # noqa: F401
 import bot.events.weekly         # noqa: F401
+import bot.events.logs_events    # noqa: F401  — logs ultra-complets (rôles, salons, sécurité…)
+
+# NOTE : member_update et voice sont gérés intégralement dans logs_events.py
+# pour éviter les doublons de logs et de calcul XP vocal.
 
 from bot.core import bot
 

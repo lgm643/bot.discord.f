@@ -15,26 +15,40 @@ from bot.utils.helpers import now_utc
 def _item_key(nom: str, vendeur_id: int) -> str:
     return f"{nom.lower().strip()}:{vendeur_id}"
 
+
+# ── Cache mémoire catalogue ───────────────────────────────────────────────────
+# Évite de relire le fichier disque à chaque commande market
+_catalogue_cache: dict[int, dict] = {}
+
 def catalogue_path(guild_id: int) -> Path:
     return CATALOGUE_DIR / f"{guild_id}.json"
 
 def load_catalogue(guild_id: int) -> dict:
+    """Charge depuis le cache mémoire. Si absent, lit le fichier disque."""
+    if guild_id in _catalogue_cache:
+        return _catalogue_cache[guild_id]
     path = catalogue_path(guild_id)
     if path.exists():
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            _catalogue_cache[guild_id] = data
+            return data
         except Exception as e:
             print(f"[CATALOGUE] Erreur lecture : {e}")
-    return {"items": {}, "msg_id": None, "commande_msg_id": None}
+    empty = {"items": {}, "msg_id": None, "commande_msg_id": None}
+    _catalogue_cache[guild_id] = empty
+    return empty
 
 def save_catalogue(guild_id: int, data: dict):
+    """Sauvegarde sur disque et met à jour le cache mémoire."""
     path = catalogue_path(guild_id)
     tmp  = str(path) + ".tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         os.replace(tmp, path)
+        _catalogue_cache[guild_id] = data   # Mise à jour du cache
     except Exception as e:
         print(f"[CATALOGUE] Erreur sauvegarde : {e}")
 
