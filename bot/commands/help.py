@@ -2,7 +2,6 @@ import discord
 
 from bot.core import bot
 
-from bot.views.help_view import HelpView
 from bot.utils.permissions import is_staff
 
 bot.remove_command("help")

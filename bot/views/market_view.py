@@ -1,6 +1,7 @@
+import asyncio
 import re
 from collections import defaultdict
-import asyncio
+
 import discord
 
 from bot.core import bot
