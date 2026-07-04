@@ -36,6 +36,7 @@ CONFIG_GROUPS = {
     ],
     "🎉 Giveaways": [
         ("role_giveaway_staff",  "🎉 Rôle staff giveaway (reroll)",    False),
+        ("role_giveaway_notif",  "🔔 Rôle notifs giveaways (!rolegw)", False),
         ("salon_giveaway_logs",  "📜 Logs giveaways / reroll",         False),
     ],
     "📨 Récompenses invitations": [

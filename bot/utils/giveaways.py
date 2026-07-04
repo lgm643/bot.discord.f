@@ -4,6 +4,7 @@ import os
 import random
 import time
 from pathlib import Path
+from typing import Optional
 
 import discord
 
@@ -74,11 +75,30 @@ def can_manage_giveaway(member: discord.Member) -> bool:
     return bool(role and role in member.roles)
 
 
-def get_eligible_participants(guild: discord.Guild, participants: list, exclude_id: int | None = None) -> list[int]:
-    """Participants encore sur le serveur, hors ancien gagnant."""
+def get_eligible_participants(
+    guild: discord.Guild,
+    participants: list,
+    exclude_id: int | None = None,
+    exclude_ids: set | None = None,
+) -> list[int]:
+    """
+    Participants encore sur le serveur, hors gagnants exclus.
+    - exclude_id   : exclut un seul ID (compat ancienne signature)
+    - exclude_ids  : exclut un ensemble d'IDs supplémentaires
+    """
+    excluded = set()
+    if exclude_id:
+        excluded.add(exclude_id)
+    if exclude_ids:
+        excluded.update(exclude_ids)
+
+    seen    = set()
     eligible = []
     for uid in participants:
-        if exclude_id and uid == exclude_id:
+        if uid in seen:
+            continue
+        seen.add(uid)
+        if uid in excluded:
             continue
         m = guild.get_member(uid)
         if m and not m.bot:
@@ -90,18 +110,48 @@ def is_giveaway_still_running(msg_id: int) -> bool:
     return msg_id in active_giveaways
 
 
-def build_ended_winner_embed(gw: dict, winner_mention: str, *, rerolled: bool = False) -> discord.Embed:
+def build_ended_winner_embed(
+    gw: dict,
+    winner_mentions: list[str] | str,
+    *,
+    rerolled: bool = False,
+) -> discord.Embed:
+    """
+    Construit l'embed de fin de giveaway.
+    winner_mentions peut être une liste (multi-gagnants) ou une chaîne (compat).
+    """
     reward = gw.get("reward", "?")
+
+    # Normaliser en liste
+    if isinstance(winner_mentions, str):
+        winner_mentions = [winner_mentions]
+
     title = f"🎉 GIVEAWAY TERMINÉ — {reward}"
+    nb    = len(winner_mentions)
+
     if rerolled:
-        desc = (
-            "Giveaway reroll effectué\n\n"
-            "Le dernier gagnant ne correspondait pas aux conditions données.\n\n"
-            f"Nouveau gagnant : {winner_mention}\n\n"
-            "Félicitations."
-        )
+        if nb == 1:
+            desc = (
+                "Giveaway reroll effectué\n\n"
+                "Le dernier gagnant ne correspondait pas aux conditions données.\n\n"
+                f"Nouveau gagnant : {winner_mentions[0]}\n\n"
+                "Félicitations."
+            )
+        else:
+            mentions_str = "\n".join(f"• {m}" for m in winner_mentions)
+            desc = (
+                "Giveaway reroll effectué\n\n"
+                "Le dernier gagnant a été remplacé.\n\n"
+                f"**Gagnants ({nb}) :**\n{mentions_str}\n\n"
+                "Félicitations."
+            )
     else:
-        desc = f"🏆 Gagnant : {winner_mention}\n🎊 Félicitations !"
+        if nb == 1:
+            desc = f"🏆 Gagnant : {winner_mentions[0]}\n🎊 Félicitations !"
+        else:
+            mentions_str = "\n".join(f"🏆 {m}" for m in winner_mentions)
+            desc = f"**{nb} gagnants tirés au sort :**\n{mentions_str}\n\n🎊 Félicitations à tous !"
+
     embed = discord.Embed(title=title, description=desc, color=0x2ECC71, timestamp=now_utc())
     embed.set_footer(
         text=f"Organisé par {gw.get('host', '?')} • {len(gw.get('participants', []))} participants"
@@ -131,23 +181,23 @@ def build_reroll_log_embed(
     new_winner_id: int,
     reward: str,
 ) -> discord.Embed:
-    old_m = guild.get_member(old_winner_id) if old_winner_id else None
-    new_m = guild.get_member(new_winner_id)
+    old_m   = guild.get_member(old_winner_id) if old_winner_id else None
+    new_m   = guild.get_member(new_winner_id)
     old_str = old_m.mention if old_m else (f"<@{old_winner_id}>" if old_winner_id else "—")
     new_str = new_m.mention if new_m else f"<@{new_winner_id}>"
     embed = discord.Embed(title="🔄 Log — Giveaway reroll", color=0x9B59B6, timestamp=now_utc())
-    embed.add_field(name="🛡️ Reroll par", value=moderator.mention, inline=True)
-    embed.add_field(name="🆔 Message ID", value=str(msg_id), inline=True)
-    embed.add_field(name="📍 Salon", value=channel.mention if hasattr(channel, "mention") else channel.name, inline=True)
-    embed.add_field(name="🏆 Ancien gagnant", value=old_str, inline=True)
-    embed.add_field(name="🎊 Nouveau gagnant", value=new_str, inline=True)
-    embed.add_field(name="🎁 Récompense", value=reward, inline=False)
+    embed.add_field(name="🛡️ Reroll par",      value=moderator.mention, inline=True)
+    embed.add_field(name="🆔 Message ID",       value=str(msg_id),       inline=True)
+    embed.add_field(name="📍 Salon",            value=channel.mention if hasattr(channel, "mention") else channel.name, inline=True)
+    embed.add_field(name="🏆 Ancien gagnant",   value=old_str,           inline=True)
+    embed.add_field(name="🎊 Nouveau gagnant",  value=new_str,           inline=True)
+    embed.add_field(name="🎁 Récompense",       value=reward,            inline=False)
     return embed
 
 
 async def get_giveaway_log_channel(guild: discord.Guild):
     cfg = load_config(guild.id)
-    ch = resolve_channel(guild, cfg.get("salon_giveaway_logs"))
+    ch  = resolve_channel(guild, cfg.get("salon_giveaway_logs"))
     if ch:
         return ch
     return cfg_channel(guild, "salon_logs")

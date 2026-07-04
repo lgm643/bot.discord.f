@@ -20,6 +20,8 @@ import bot.commands.config_cmd   # noqa: F401
 import bot.commands.games        # noqa: F401
 import bot.commands.avantages    # noqa: F401
 import bot.commands.stats        # noqa: F401
+import bot.commands.rolegw       # noqa: F401  — toggle rôle notif giveaways
+import bot.commands.profil       # noqa: F401  — !profil complet
 
 import bot.events.invite_events  # noqa: F401
 import bot.events.message        # noqa: F401

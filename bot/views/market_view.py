@@ -236,23 +236,57 @@ class _CommandeRechercheButton(discord.ui.Button):
                 pass
 
 
+class _CommandeParcourirButton(discord.ui.Button):
+    def __init__(self, guild_id: int):
+        super().__init__(
+            label="🔽 Parcourir / Trier",
+            style=discord.ButtonStyle.grey,
+            row=1,
+            custom_id=f"commande_parcourir_{guild_id}",
+        )
+        self.guild_id = guild_id
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            data  = load_catalogue(interaction.guild.id)
+            items = data.get("items", {})
+            view  = _CataloguePersoView(interaction.guild, items)
+            embed = view.build_embed()
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        except Exception as e:
+            try:
+                await interaction.response.send_message(
+                    embed=discord.Embed(title="❌ Erreur", description=str(e), color=0xE74C3C),
+                    ephemeral=True
+                )
+            except Exception:
+                pass
+
+
 class CommandeView(discord.ui.View):
     def __init__(self, guild_id, items):
         super().__init__(timeout=None)
         self.guild_id = guild_id
         self.add_item(CommandeSelect(guild_id, _clean_ghost_items(items)))
         self.add_item(_CommandeRechercheButton(guild_id))
+        self.add_item(_CommandeParcourirButton(guild_id))
 
+
+PREVIEW_MAX = 12  # Nombre d'articles affichés dans l'embed permanent
 
 def _build_commande_embed_from_items(guild: discord.Guild, items: dict) -> discord.Embed:
     embed = discord.Embed(title="🛒 Boutique — Passer une commande", color=0x9B59B6, timestamp=now_utc())
     if guild.icon: embed.set_thumbnail(url=guild.icon.url)
     live = _clean_ghost_items(items)
+    total = len(live)
     if not live:
         embed.description = "📭 **Le catalogue est vide pour l'instant.**\nRevenez bientôt !"
     else:
+        # Trier A→Z et limiter à PREVIEW_MAX pour éviter la troncature Discord
+        sorted_items = sorted(live.values(), key=lambda x: x["nom"].lower())
+        preview      = sorted_items[:PREVIEW_MAX]
         par_vendeur: dict[int, list] = defaultdict(list)
-        for key, item in live.items():
+        for item in preview:
             par_vendeur[item["vendeur_id"]].append(item)
         lignes = []
         for vendeur_id, arts in par_vendeur.items():
@@ -262,9 +296,15 @@ def _build_commande_embed_from_items(guild: discord.Guild, items: dict) -> disco
             for art in arts:
                 lignes.append(f"  └ 🔹 **{art['nom']}** — 📦 {art['quantite']} · 💰 {art['prix']}")
         embed.description = "\n".join(lignes)
-    instructions = "📋 **Menu déroulant** → sélectionner un article\n🔍 **Rechercher** → trouver par nom ou mots-clés\n🔄 Catalogue mis à jour automatiquement"
-    if len(live) > 25:
-        instructions += f"\n⚠️ **{len(live) - 25} article(s) non affiché(s) dans le menu** — utilisez 🔍 Rechercher pour les trouver"
+        if total > PREVIEW_MAX:
+            embed.description += f"\n\n*...et **{total - PREVIEW_MAX}** autre(s) article(s) — clique sur 🔽 Parcourir pour tout voir.*"
+    nb_str = f"{total} article(s)" if total else "catalogue vide"
+    instructions = (
+        f"📋 **Menu déroulant** → commander rapidement (25 max)\n"
+        f"🔽 **Parcourir / Trier** → voir tous les {nb_str} avec filtres\n"
+        f"🔍 **Rechercher** → trouver par nom ou mots-clés\n"
+        f"🔄 Catalogue mis à jour automatiquement"
+    )
     embed.add_field(name="━━━━━━━━━━━━━━━━━━", value=instructions, inline=False)
     embed.set_footer(text="Embed permanent · Se met à jour automatiquement toutes les 3s")
     return embed
@@ -364,12 +404,12 @@ class RoleToggleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔔 Activer/désactiver les notifications", style=discord.ButtonStyle.blurple, custom_id="role_toggle_acheteur")
+    @discord.ui.button(label="🔔 Notifications marché", style=discord.ButtonStyle.blurple, custom_id="role_toggle_acheteur", row=0)
     async def toggle_role(self, interaction, button):
         try:
             role = cfg_role(interaction.guild, "role_acheteur_notif")
             if not role:
-                await interaction.response.send_message("❌ Rôle introuvable.", ephemeral=True); return
+                await interaction.response.send_message("❌ Rôle marché introuvable. Configure `role_acheteur_notif`.", ephemeral=True); return
             await interaction.response.defer(ephemeral=True)
             member = interaction.user
             if role in member.roles:
@@ -378,6 +418,33 @@ class RoleToggleView(discord.ui.View):
             else:
                 await member.add_roles(role, reason="Toggle notif market")
                 await interaction.followup.send("🔔 Notifications marché **activées** !", ephemeral=True)
+        except discord.NotFound:
+            pass
+        except discord.InteractionResponded:
+            pass
+        except Exception as e:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(f"❌ Erreur : {e}", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"❌ Erreur : {e}", ephemeral=True)
+            except Exception:
+                pass
+
+    @discord.ui.button(label="🎉 Notifications giveaways", style=discord.ButtonStyle.green, custom_id="role_toggle_giveaway", row=0)
+    async def toggle_giveaway(self, interaction, button):
+        try:
+            role = cfg_role(interaction.guild, "role_giveaway_notif")
+            if not role:
+                await interaction.response.send_message("❌ Rôle giveaway introuvable. Configure `role_giveaway_notif` via `!config`.", ephemeral=True); return
+            await interaction.response.defer(ephemeral=True)
+            member = interaction.user
+            if role in member.roles:
+                await member.remove_roles(role, reason="Toggle notif giveaway")
+                await interaction.followup.send("🔕 Notifications giveaways **désactivées**.\nTu ne seras plus mentionné lors des prochains giveaways.", ephemeral=True)
+            else:
+                await member.add_roles(role, reason="Toggle notif giveaway")
+                await interaction.followup.send("🎉 Notifications giveaways **activées** !\nTu seras mentionné lors des prochains giveaways.", ephemeral=True)
         except discord.NotFound:
             pass
         except discord.InteractionResponded:

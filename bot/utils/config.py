@@ -70,6 +70,7 @@ DEFAULT_CONFIG = {
     "inviteLogsChannel":     "",
     "salon_avantages":       "",
     "role_giveaway_staff":   "",
+    "role_giveaway_notif":   "",
     "salon_giveaway_logs":   "",
     # ── Stats & Hebdo ──────────────────────────────────────────────────────────
     "salon_hebdo":       "",
