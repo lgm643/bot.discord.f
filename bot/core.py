@@ -62,7 +62,7 @@ EXEMPT_COMMANDS = {
     "pub", "say", "dit", "roster", "membres", "liste", "faction",
     "ticket", "tickets", "support", "fermer", "close", "closeticket", "fermeticket",
     "stock", "recherche",
-    "info", "profil", "whois", "user", "membre",
+    "info", "profil", "profile", "p", "whois", "user", "membre",
     "help", "aide", "commandes", "setup", "config",
     "gestion", "objectif", "vendu", "cataloguesuppall", "catalogueview",
     "invite", "topinvites", "vendeur", "accepter", "refuser",

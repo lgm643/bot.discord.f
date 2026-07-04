@@ -199,7 +199,7 @@ async def effacer(ctx, nombre: int = None):
     await send_log(ctx.guild, embed)
 
 
-@bot.command(name="info", aliases=["profil", "whois", "user", "membre"])
+@bot.command(name="info", aliases=["whois", "user", "membre"])
 async def info(ctx, member: discord.Member = None):
     member   = member or ctx.author
     roles    = [r.mention for r in reversed(member.roles) if r.name != "@everyone"]
