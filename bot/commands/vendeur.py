@@ -147,7 +147,7 @@ async def vendeur_cmd(ctx):
 
 @bot.hybrid_command(name="accepter")
 async def accepter_cmd(ctx, *, raison: str = "Demande acceptée par le staff."):
-    """Accepte une demande vendeur dans un ticket vendeur. (Astuce : un bouton ✅ fait pareil sans taper de commande.)"""
+    """Accepte une demande vendeur dans un ticket. (Astuce : le bouton ✅ fait pareil.)"""
     if not is_staff(ctx.author):
         await ctx.send("❌ Réservé au staff.", delete_after=5)
         return
@@ -161,7 +161,7 @@ async def accepter_cmd(ctx, *, raison: str = "Demande acceptée par le staff."):
 
 @bot.hybrid_command(name="refuser")
 async def refuser_cmd(ctx, *, raison: str = "Demande refusée par le staff."):
-    """Refuse une demande vendeur dans un ticket vendeur. (Astuce : un bouton ❌ fait pareil sans taper de commande.)"""
+    """Refuse une demande vendeur dans un ticket. (Astuce : le bouton ❌ fait pareil.)"""
     if not is_staff(ctx.author):
         await ctx.send("❌ Réservé au staff.", delete_after=5)
         return
