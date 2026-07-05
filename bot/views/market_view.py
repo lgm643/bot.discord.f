@@ -9,13 +9,14 @@ from bot.core import bot
 from bot.core import _pending_orders
 from bot.utils.market import (
     load_catalogue, save_catalogue, fuzzy_search, _clean_ghost_items,
-    update_catalogue_message, send_notif, _parse_prix_num,
+    update_catalogue_message, send_notif, _parse_prix_num, item_categorie, PRIX_BUCKETS,
 )
 from bot.utils.config import cfg_category, cfg_channel, cfg_role, load_config
 from bot.utils.permissions import is_staff, is_vendeur
 from bot.utils.helpers import now_utc
 from bot.utils.logs import send_log
 from bot.utils.stats import record_sale
+from bot.utils.prefs import is_compact
 
 class _GestionConfirmView(discord.ui.View):
     def __init__(self, author_id: int):
@@ -250,7 +251,7 @@ class _CommandeParcourirButton(discord.ui.Button):
         try:
             data  = load_catalogue(interaction.guild.id)
             items = data.get("items", {})
-            view  = _CataloguePersoView(interaction.guild, items)
+            view  = _CataloguePersoView(interaction.guild, items, owner_id=interaction.user.id)
             embed = view.build_embed()
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         except Exception as e:
@@ -275,7 +276,9 @@ class CommandeView(discord.ui.View):
 PREVIEW_MAX = 12  # Nombre d'articles affichés dans l'embed permanent
 
 def _build_commande_embed_from_items(guild: discord.Guild, items: dict) -> discord.Embed:
-    embed = discord.Embed(title="🛒 Boutique — Passer une commande", color=0x9B59B6, timestamp=now_utc())
+    from bot.utils.emojis import get_emoji
+    emoji_market = get_emoji(guild, "market")
+    embed = discord.Embed(title=f"{emoji_market} Boutique — Passer une commande", color=0x9B59B6, timestamp=now_utc())
     if guild.icon: embed.set_thumbnail(url=guild.icon.url)
     live = _clean_ghost_items(items)
     total = len(live)
@@ -724,7 +727,7 @@ class CatalogueView(discord.ui.View):
         try:
             data  = load_catalogue(interaction.guild.id)
             items = data.get("items", {})
-            view  = _CataloguePersoView(interaction.guild, items)
+            view  = _CataloguePersoView(interaction.guild, items, owner_id=interaction.user.id)
             embed = view.build_embed()
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         except Exception as e:
@@ -751,7 +754,7 @@ class _CatalogueTriSelect(discord.ui.Select):
             discord.SelectOption(label="👤 Par vendeur",      value="vendeur"),
         ]
         import uuid
-        super().__init__(placeholder="Trier par…", options=options, custom_id=f"cat_perso_tri_{uuid.uuid4().hex[:8]}")
+        super().__init__(placeholder="Trier par…", options=options, custom_id=f"cat_perso_tri_{uuid.uuid4().hex[:8]}", row=0)
 
     async def callback(self, interaction: discord.Interaction):
         try:
@@ -772,27 +775,89 @@ class _CatalogueTriSelect(discord.ui.Select):
 
 
 # ═══════════════════════════════════════════════════════════════
-# VUE PERSONNELLE ÉPHÉMÈRE — tri + pagination + recherche
+# SELECT CATÉGORIE — filtre par catégorie d'article
+# ═══════════════════════════════════════════════════════════════
+class _CatalogueCategorieSelect(discord.ui.Select):
+    def __init__(self, categories: list[str]):
+        options = [discord.SelectOption(label="🗂️ Toutes les catégories", value="__toutes__", default=True)]
+        for c in categories[:24]:
+            options.append(discord.SelectOption(label=f"🗂️ {c}"[:100], value=c))
+        import uuid
+        super().__init__(placeholder="Filtrer par catégorie…", options=options, custom_id=f"cat_perso_categorie_{uuid.uuid4().hex[:8]}", row=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            view: _CataloguePersoView = self.view
+            view.categorie_filtre = None if self.values[0] == "__toutes__" else self.values[0]
+            view.page = 0
+            view._rebuild_pages()
+            view._sync_buttons()
+            await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        except Exception as e:
+            try:
+                await interaction.response.send_message(embed=discord.Embed(title="❌ Erreur", description=str(e), color=0xE74C3C), ephemeral=True)
+            except Exception:
+                pass
+
+
+# ═══════════════════════════════════════════════════════════════
+# SELECT PRIX — filtre par tranche de prix
+# ═══════════════════════════════════════════════════════════════
+class _CataloguePrixSelect(discord.ui.Select):
+    def __init__(self):
+        options = [discord.SelectOption(label="💰 Tous les prix", value="__tous__", default=True)]
+        for key, label, _pred in PRIX_BUCKETS:
+            options.append(discord.SelectOption(label=label, value=key))
+        import uuid
+        super().__init__(placeholder="Filtrer par prix…", options=options, custom_id=f"cat_perso_prix_{uuid.uuid4().hex[:8]}", row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            view: _CataloguePersoView = self.view
+            view.prix_filtre = None if self.values[0] == "__tous__" else self.values[0]
+            view.page = 0
+            view._rebuild_pages()
+            view._sync_buttons()
+            await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        except Exception as e:
+            try:
+                await interaction.response.send_message(embed=discord.Embed(title="❌ Erreur", description=str(e), color=0xE74C3C), ephemeral=True)
+            except Exception:
+                pass
+
+
+# ═══════════════════════════════════════════════════════════════
+# VUE PERSONNELLE ÉPHÉMÈRE — tri + filtres + pagination + recherche
 # ═══════════════════════════════════════════════════════════════
 class _CataloguePersoView(discord.ui.View):
     """Vue éphémère personnelle : chaque utilisateur a la sienne."""
 
-    def __init__(self, guild: discord.Guild, items: dict, tri_actif: str = "az", page: int = 0):
+    def __init__(self, guild: discord.Guild, items: dict, tri_actif: str = "az", page: int = 0, owner_id: int | None = None):
         super().__init__(timeout=300)
-        self.guild     = guild
-        self.items     = _clean_ghost_items(items)
-        self.tri_actif = tri_actif
-        self.page      = page
+        self.guild          = guild
+        self.items          = _clean_ghost_items(items)
+        self.tri_actif       = tri_actif
+        self.page            = page
+        self.categorie_filtre = None   # None = toutes
+        self.prix_filtre       = None  # None = tous
         self.pages: list[list] = []
-        self._owner_id: int | None = None
+        self._owner_id: int | None = owner_id
+        self.compact = is_compact(guild.id, owner_id) if owner_id else False
 
         self.add_item(_CatalogueTriSelect())
+        categories = sorted({item_categorie(v) for v in self.items.values()})
+        if categories:
+            self.add_item(_CatalogueCategorieSelect(categories))
+        if self.items:
+            self.add_item(_CataloguePrixSelect())
         self._rebuild_pages()
         self._sync_buttons()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self._owner_id is None:
             self._owner_id = interaction.user.id
+            # Applique la préférence "embed compact" du propriétaire dès la première interaction
+            self.compact = is_compact(self.guild.id, interaction.user.id)
         if interaction.user.id != self._owner_id:
             await interaction.response.send_message(
                 "❌ Cette vue ne t'appartient pas. Clique sur **🔽 Trier / Parcourir** pour ouvrir la tienne.",
@@ -801,9 +866,20 @@ class _CataloguePersoView(discord.ui.View):
             return False
         return True
 
+    # ── Filtres ────────────────────────────────────────────────
+    def _filtered_items(self) -> list:
+        items = list(self.items.values())
+        if self.categorie_filtre:
+            items = [i for i in items if item_categorie(i) == self.categorie_filtre]
+        if self.prix_filtre:
+            pred = next((p for k, _l, p in PRIX_BUCKETS if k == self.prix_filtre), None)
+            if pred:
+                items = [i for i in items if pred(_parse_prix_num(i["prix"]))]
+        return items
+
     # ── Tri ────────────────────────────────────────────────────
     def _sorted_items(self) -> list:
-        items = list(self.items.values())
+        items = self._filtered_items()
         if self.tri_actif == "az":
             return sorted(items, key=lambda x: x["nom"].lower())
         elif self.tri_actif == "prix_asc":
@@ -823,12 +899,13 @@ class _CataloguePersoView(discord.ui.View):
     # ── Pagination ─────────────────────────────────────────────
     def _rebuild_pages(self):
         sorted_items = self._sorted_items()
+        par_page = 20 if getattr(self, "compact", False) else ITEMS_PAR_PAGE
         if not sorted_items:
             self.pages = [[]]
         else:
             self.pages = [
-                sorted_items[i:i + ITEMS_PAR_PAGE]
-                for i in range(0, len(sorted_items), ITEMS_PAR_PAGE)
+                sorted_items[i:i + par_page]
+                for i in range(0, len(sorted_items), par_page)
             ]
         self.page = max(0, min(self.page, len(self.pages) - 1))
 
@@ -843,12 +920,17 @@ class _CataloguePersoView(discord.ui.View):
 
     # ── Embed ──────────────────────────────────────────────────
     def build_embed(self) -> discord.Embed:
-        total    = len(self.items)
+        compact  = getattr(self, "compact", False)
+        total    = len(self._filtered_items())
         nb_pages = len(self.pages)
+        filtres  = []
+        if self.categorie_filtre: filtres.append(f"🗂️ {self.categorie_filtre}")
+        if self.prix_filtre:      filtres.append(next((l for k, l, _p in PRIX_BUCKETS if k == self.prix_filtre), ""))
+        filtre_str = f" · Filtres : {', '.join(filtres)}" if filtres else ""
         embed = discord.Embed(
-            title="🏪 Catalogue — Vue personnelle",
+            title="🏪 Catalogue — Vue personnelle" + (" 📱" if compact else ""),
             description=(
-                f"**{total}** article(s) · Tri : {TRI_LABELS.get(self.tri_actif, '—')}\n"
+                f"**{total}** article(s) · Tri : {TRI_LABELS.get(self.tri_actif, '—')}{filtre_str}\n"
                 f"Page **{self.page + 1}** / **{nb_pages}**"
             ),
             color=0xF1C40F,
@@ -857,8 +939,24 @@ class _CataloguePersoView(discord.ui.View):
         if not self.items:
             embed.add_field(name="📭 Aucun article", value="Le catalogue est vide.", inline=False)
             return embed
+        if total == 0:
+            embed.add_field(name="📭 Aucun résultat", value="Aucun article ne correspond à ces filtres.", inline=False)
+            return embed
 
         page_items = self.pages[self.page] if self.pages else []
+
+        if compact:
+            # Mode compact mobile : une ligne condensée par article, pas de regroupement par vendeur
+            lignes = [f"🔹 **{i['nom']}** {i['quantite']}x · {i['prix']}" for i in page_items]
+            chunk, chunks = "", []
+            for l in lignes:
+                if len(chunk) + len(l) + 1 > 1000: chunks.append(chunk); chunk = l
+                else: chunk = (chunk + "\n" + l).strip()
+            if chunk: chunks.append(chunk)
+            for idx, c in enumerate(chunks):
+                embed.add_field(name="📋" if idx == 0 else "\u200b", value=c, inline=False)
+            embed.set_footer(text="Mode compact · !preferences pour changer d'affichage")
+            return embed
 
         if self.tri_actif == "vendeur":
             par_vendeur: dict[str, list] = defaultdict(list)
@@ -868,7 +966,7 @@ class _CataloguePersoView(discord.ui.View):
                 par_vendeur[vnom].append(item)
             for vnom, arts in par_vendeur.items():
                 lignes = "\n".join(
-                    f"🔹 **{a['nom']}** — 📦 {a['quantite']}x · 💰 {a['prix']}"
+                    f"🔹 **{a['nom']}** — 📦 {a['quantite']}x · 💰 {a['prix']} · 🗂️ {item_categorie(a)}"
                     for a in arts
                 )
                 embed.add_field(name=f"━━━━━━ 👤 {vnom} ━━━━━━", value=lignes, inline=False)
@@ -877,7 +975,7 @@ class _CataloguePersoView(discord.ui.View):
             for item in page_items:
                 m     = self.guild.get_member(item["vendeur_id"])
                 vnom  = m.display_name if m else f"<@{item['vendeur_id']}>"
-                ligne = f"🔹 **{item['nom']}** — 📦 {item['quantite']}x · 💰 {item['prix']} · 👤 {vnom}"
+                ligne = f"🔹 **{item['nom']}** — 📦 {item['quantite']}x · 💰 {item['prix']} · 🗂️ {item_categorie(item)} · 👤 {vnom}"
                 if len(chunk) + len(ligne) + 1 > 1000:
                     chunks.append(chunk); chunk = ligne
                 else:
@@ -890,7 +988,7 @@ class _CataloguePersoView(discord.ui.View):
         return embed
 
     # ── Boutons navigation + recherche ─────────────────────────
-    @discord.ui.button(label="◀", style=discord.ButtonStyle.grey, row=1, disabled=True)
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.grey, row=3, disabled=True)
     async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.page -= 1
@@ -905,7 +1003,7 @@ class _CataloguePersoView(discord.ui.View):
             except Exception:
                 pass
 
-    @discord.ui.button(label="🔍 Rechercher", style=discord.ButtonStyle.blurple, row=1)
+    @discord.ui.button(label="🔍 Rechercher", style=discord.ButtonStyle.blurple, row=3)
     async def recherche(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await interaction.response.send_modal(CatalogueRechercheModal(interaction.guild.id))
@@ -918,7 +1016,7 @@ class _CataloguePersoView(discord.ui.View):
             except Exception:
                 pass
 
-    @discord.ui.button(label="▶", style=discord.ButtonStyle.grey, row=1)
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.grey, row=3)
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.page += 1

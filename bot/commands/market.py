@@ -65,9 +65,13 @@ async def gestion_cmd(ctx):
     except ValueError:
         await ctx.send("❌ Quantité invalide.", delete_after=6); return
 
-    resp_prix = await ask("📦 Étape 3/3 — Prix", f"Quel est le **prix unitaire** pour **{nom}** ?")
+    resp_prix = await ask("📦 Étape 3/4 — Prix", f"Quel est le **prix unitaire** pour **{nom}** ?")
     if not resp_prix: return
     prix = resp_prix.content.strip()
+
+    resp_cat = await ask("📦 Étape 4/4 — Catégorie (optionnel)", f"Quelle **catégorie** pour **{nom}** ?\n*(tape `skip` pour 'Divers')*")
+    if not resp_cat: return
+    categorie = "Divers" if resp_cat.content.strip().lower() == "skip" else resp_cat.content.strip()[:30]
 
     data    = load_catalogue(ctx.guild.id)
     items   = data.get("items", {})
@@ -98,10 +102,11 @@ async def gestion_cmd(ctx):
     if existant:
         items[my_key]["quantite"] += qty
         items[my_key]["prix"] = prix
+        items[my_key]["categorie"] = categorie
         action = f"✏️ **{nom}** mis à jour par {ctx.author.mention} — stock : {items[my_key]['quantite']} · prix : {items[my_key]['prix']}"
     else:
-        items[my_key] = {"nom": nom, "quantite": qty, "prix": prix, "vendeur_id": ctx.author.id, "created": time.time()}
-        action = f"➕ **{nom}** ajouté par {ctx.author.mention} — stock : {qty} · prix : {prix}"
+        items[my_key] = {"nom": nom, "quantite": qty, "prix": prix, "vendeur_id": ctx.author.id, "categorie": categorie, "created": time.time()}
+        action = f"➕ **{nom}** ajouté par {ctx.author.mention} — stock : {qty} · prix : {prix} · catégorie : {categorie}"
 
     data["items"] = items
     save_catalogue(ctx.guild.id, data)
@@ -115,11 +120,19 @@ async def catalogue_cmd(ctx, *, args: str = None):
         await ctx.send(embed=discord.Embed(title="❌ Permission insuffisante", description="Réservé aux vendeurs certifiés.", color=0xE74C3C), delete_after=5)
         return
     if not args:
-        await ctx.send("❌ `!catalogue <nom> <quantité> <prix>`\nExemple : `!catalogue paladium ingot 10 500$`", delete_after=10)
+        await ctx.send("❌ `!catalogue <nom> <quantité> <prix> [--cat <catégorie>]`\nExemple : `!catalogue paladium ingot 10 500$ --cat Ressources`", delete_after=10)
         return
+
+    # Extraire le flag optionnel --cat <catégorie>
+    categorie = "Divers"
+    cat_match = re.search(r"--cat\s+(.+)$", args, re.IGNORECASE)
+    if cat_match:
+        categorie = cat_match.group(1).strip()[:30] or "Divers"
+        args = args[:cat_match.start()].strip()
+
     tokens = args.split()
     if len(tokens) < 3:
-        await ctx.send("❌ `!catalogue <nom> <quantité> <prix>`", delete_after=10)
+        await ctx.send("❌ `!catalogue <nom> <quantité> <prix> [--cat <catégorie>]`", delete_after=10)
         return
     # Cherche le PREMIER entier pur (de gauche à droite) après la position 0.
     # La quantité est toujours avant le prix : !catalogue <nom...> <QTY> <prix...>
@@ -178,11 +191,12 @@ async def catalogue_cmd(ctx, *, args: str = None):
             items[my_key]["prix"] = prix
         else:
             items[my_key]["prix"] = prix
+        items[my_key]["categorie"] = categorie
         items[my_key]["updated"] = time.time()
         action = f"✏️ **{nom}** mis à jour par {ctx.author.mention} — stock : {items[my_key]['quantite']} · prix : {items[my_key]['prix']}"
     else:
-        items[my_key] = {"nom": nom, "quantite": qty, "prix": prix, "vendeur_id": ctx.author.id, "created": time.time(), "updated": time.time()}
-        action = f"➕ **{nom}** ajouté par {ctx.author.mention} — stock : {qty} · prix : {prix}"
+        items[my_key] = {"nom": nom, "quantite": qty, "prix": prix, "vendeur_id": ctx.author.id, "categorie": categorie, "created": time.time(), "updated": time.time()}
+        action = f"➕ **{nom}** ajouté par {ctx.author.mention} — stock : {qty} · prix : {prix} · catégorie : {categorie}"
 
     data["items"] = items
     save_catalogue(ctx.guild.id, data)

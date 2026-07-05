@@ -18,6 +18,8 @@ from bot.core import bot
 from bot.utils.config import load_config, cfg_roles, cfg_category
 from bot.utils.helpers import now_utc
 from bot.utils.logs import send_log
+# Import différé dans on_submit pour éviter un import circulaire avec vendeur_view.py
+# (vendeur_view importe déjà VendeurModal depuis ce module).
 
 class VendeurModal(discord.ui.Modal, title="🛒 Demande de Vendeur Certifié"):
     pseudo = discord.ui.TextInput(
@@ -73,8 +75,10 @@ class VendeurModal(discord.ui.Modal, title="🛒 Demande de Vendeur Certifié"):
         )
 
         # Embed récapitulatif dans le ticket
+        from bot.utils.emojis import get_emoji
+        emoji_vendeur = get_emoji(guild, "vendeur")
         embed = discord.Embed(
-            title="🛒 Demande de Vendeur Certifié",
+            title=f"{emoji_vendeur} Demande de Vendeur Certifié",
             color=0xF1C40F,
             timestamp=now_utc()
         )
@@ -95,12 +99,17 @@ class VendeurModal(discord.ui.Modal, title="🛒 Demande de Vendeur Certifié"):
             ),
             inline=False
         )
-        embed.set_footer(text="Staff : utilisez !accepter ou !refuser pour traiter la demande · !fermer pour clore")
+        embed.set_footer(text="Staff : utilisez les boutons ✅/❌ ci-dessous (ou !accepter / !refuser) · !fermer pour clore")
+
+        from bot.views.vendeur_view import VendeurDecisionView
+        decision_view = VendeurDecisionView(member.id)
+        bot.add_view(decision_view)  # persistant après redémarrage grâce au custom_id figé
 
         ping_staff = " ".join(r.mention for r in staff_roles) if staff_roles else "@Staff"
         await ticket_ch.send(
             content=f"{ping_staff} | {member.mention}\n📋 Nouvelle demande de **Vendeur Certifié** !",
-            embed=embed
+            embed=embed,
+            view=decision_view,
         )
 
         await interaction.response.send_message(

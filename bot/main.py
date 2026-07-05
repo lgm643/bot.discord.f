@@ -22,6 +22,9 @@ import bot.commands.avantages    # noqa: F401
 import bot.commands.stats        # noqa: F401
 import bot.commands.rolegw       # noqa: F401  — toggle rôle notif giveaways
 import bot.commands.profil       # noqa: F401  — !profil complet
+import bot.commands.preferences  # noqa: F401  — !preferences (DM opt-in + mode embed)
+import bot.commands.customisation # noqa: F401  — !emoji, !ticketsmode
+import bot.commands.recherche_slash # noqa: F401  — /recherche avec autocomplete
 
 import bot.events.invite_events  # noqa: F401
 import bot.events.message        # noqa: F401

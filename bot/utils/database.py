@@ -52,6 +52,14 @@ def init_db():
                 reason     TEXT NOT NULL DEFAULT 'Aucune raison fournie',
                 PRIMARY KEY (guild_id, user_id)
             );
+            CREATE TABLE IF NOT EXISTS user_prefs (
+                guild_id       INTEGER NOT NULL,
+                user_id        INTEGER NOT NULL,
+                dm_giveaway    INTEGER NOT NULL DEFAULT 1,
+                dm_candidature INTEGER NOT NULL DEFAULT 1,
+                embed_mode     TEXT    NOT NULL DEFAULT 'full',
+                PRIMARY KEY (guild_id, user_id)
+            );
         """)
         # Migration : ajoute invited_name si la table existait sans cette colonne
         try:
@@ -109,3 +117,39 @@ def db_delete_mute(guild_id: int, user_id: int):
 def db_get_mutes(guild_id: int):
     with get_db() as conn:
         return conn.execute("SELECT * FROM mutes WHERE guild_id=?", (guild_id,)).fetchall()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  PRÉFÉRENCES UTILISATEUR — SQLITE
+#  (notifs DM opt-in, mode d'affichage des embeds)
+# ═══════════════════════════════════════════════════════════════
+
+def db_get_user_prefs(guild_id: int, user_id: int) -> dict:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_prefs WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id)
+        ).fetchone()
+    if row:
+        return {
+            "dm_giveaway":    bool(row["dm_giveaway"]),
+            "dm_candidature": bool(row["dm_candidature"]),
+            "embed_mode":     row["embed_mode"],
+        }
+    return {"dm_giveaway": True, "dm_candidature": True, "embed_mode": "full"}
+
+
+def db_set_user_pref(guild_id: int, user_id: int, **kwargs):
+    """Met à jour une ou plusieurs préférences (dm_giveaway=, dm_candidature=, embed_mode=)."""
+    current = db_get_user_prefs(guild_id, user_id)
+    current.update(kwargs)
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO user_prefs (guild_id, user_id, dm_giveaway, dm_candidature, embed_mode)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(guild_id, user_id) DO UPDATE SET
+                       dm_giveaway=excluded.dm_giveaway,
+                       dm_candidature=excluded.dm_candidature,
+                       embed_mode=excluded.embed_mode""",
+            (guild_id, user_id, int(current["dm_giveaway"]), int(current["dm_candidature"]), current["embed_mode"])
+        )

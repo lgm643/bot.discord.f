@@ -31,6 +31,7 @@ CONFIG_GROUPS = {
         ("salon_objectifs",      "🎯 Salon objectifs",                  False),
         ("salon_gestion",        "📦 Salon gestion stock",              False),
         ("salon_vendeur",        "🛒 Salon demande vendeur certifié",   False),
+        ("salon_tickets_parent", "🧵 Salon parent des threads tickets", False),
         ("inviteLogsChannel",    "📨 Logs paliers invitations",         False),
         ("salon_avantages",      "🎁 Salon avantages invitations",      False),
     ],

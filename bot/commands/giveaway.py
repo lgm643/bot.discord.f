@@ -21,6 +21,20 @@ from bot.utils.giveaways import (
     build_reroll_log_embed,
     send_giveaway_log,
 )
+from bot.utils.prefs import wants_dm_giveaway
+
+
+async def _dm_winners(guild: discord.Guild, winner_ids: list[int], reward: str):
+    for wid in winner_ids:
+        if not wants_dm_giveaway(guild.id, wid):
+            continue
+        member = guild.get_member(wid)
+        if not member:
+            continue
+        try:
+            await member.send(f"🎉 Félicitations ! Tu as gagné **{reward}** sur **{guild.name}** !")
+        except discord.Forbidden:
+            pass
 
 
 def parse_duration(s):
@@ -169,6 +183,7 @@ async def _end_giveaway(gw_id, delay, channel, reward):
             )
 
         save_ended_giveaway(gw_id, gw)
+        asyncio.create_task(_dm_winners(channel.guild, winner_ids, reward))
 
     except Exception as e:
         print(f"[GW] Erreur fin giveaway : {e}")
@@ -281,6 +296,7 @@ async def reroll_cmd(ctx, message_id: str = None):
     await msg.edit(embed=embed, view=None)
 
     await channel.send(embed=build_reroll_announce_embed(new_mention))
+    asyncio.create_task(_dm_winners(ctx.guild, [new_winner_id], gw.get("reward", "?")))
 
     log_embed = build_reroll_log_embed(
         ctx.guild,

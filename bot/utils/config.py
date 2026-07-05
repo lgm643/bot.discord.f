@@ -91,6 +91,11 @@ DEFAULT_CONFIG = {
     "vocal_inactivity_exempt_roles":     [],     # Rôles exclus (IDs ou noms)
     "vocal_inactivity_exempt_users":     [],     # Membres exclus (IDs)
     "salon_logs_vocal_inactivity":       "",     # Salon logs dédié (vide = salon_logs)
+    # ── Emojis custom ────────────────────────────────────────────────────────
+    "emojis": {},          # ex: {"market": "<:boutique:123>", "giveaway": "<:cadeau:456>"}
+    # ── Tickets ─────────────────────────────────────────────────────────────
+    "tickets_mode":          "channels",   # "channels" ou "threads"
+    "salon_tickets_parent":  "",           # salon texte parent pour les threads privés
 }
 
 

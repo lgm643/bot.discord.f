@@ -3,9 +3,29 @@ import discord
 
 from bot.core import bot
 
-from bot.utils.config import cfg_roles, cfg_role, cfg_category
+from bot.utils.config import cfg_roles, cfg_role, cfg_category, cfg_channel, load_config
 from bot.utils.permissions import is_staff
 from bot.utils.tickets import send_ticket_log
+
+
+async def _create_ticket_thread(guild: discord.Guild, parent: discord.TextChannel, name: str, creator: discord.Member, extra_members=None) -> discord.Thread:
+    """Crée un thread privé pour servir de ticket (alternative aux salons dédiés)."""
+    thread = await parent.create_thread(
+        name=name[:100],
+        type=discord.ChannelType.private_thread,
+        invitable=False,
+        reason=f"Ticket créé par {creator}",
+    )
+    try:
+        await thread.add_user(creator)
+    except Exception:
+        pass
+    for m in (extra_members or []):
+        try:
+            await thread.add_user(m)
+        except Exception:
+            pass
+    return thread
 
 class TicketView(discord.ui.View):
     def __init__(self):
@@ -74,15 +94,30 @@ async def creer_ticket(interaction: discord.Interaction, type_ticket: str):
     staff_roles = cfg_roles(guild, "role_staff")
     recruteur   = cfg_role(guild, "role_recruteur")
     category    = cfg_category(guild, "categorie_tickets")
-    overwrites  = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        interaction.user:   discord.PermissionOverwrite(view_channel=True, send_messages=True),
-    }
-    for r in staff_roles:
-        overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-    if recruteur and type_ticket == "recrutement":
-        overwrites[recruteur] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-    channel = await guild.create_text_channel(f"ticket-{interaction.user.name}", category=category, overwrites=overwrites)
+    cfg         = load_config(guild.id)
+
+    if cfg.get("tickets_mode") == "threads":
+        parent = cfg_channel(guild, "salon_tickets_parent")
+        if not parent:
+            await interaction.response.send_message(
+                "❌ Mode threads activé mais aucun salon parent configuré. Contacte un staff.",
+                ephemeral=True,
+            )
+            return
+        # Staff avec la permission "Gérer les threads/salons" voient les threads privés
+        # sans besoin d'y être ajoutés individuellement ; on ajoute quand même le recruteur.
+        extra = [recruteur] if (recruteur and type_ticket == "recrutement") else []
+        channel = await _create_ticket_thread(guild, parent, f"ticket-{interaction.user.name}", interaction.user, extra)
+    else:
+        overwrites  = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user:   discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        }
+        for r in staff_roles:
+            overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+        if recruteur and type_ticket == "recrutement":
+            overwrites[recruteur] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+        channel = await guild.create_text_channel(f"ticket-{interaction.user.name}", category=category, overwrites=overwrites)
     if type_ticket == "recrutement":
         ping  = recruteur.mention if recruteur else " ".join(r.mention for r in staff_roles) or "@Staff"
         texte = (

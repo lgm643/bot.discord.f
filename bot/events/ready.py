@@ -20,7 +20,7 @@ from bot.views.ticket_view import TicketView
 from bot.views.market_view import (
     RoleToggleView, CatalogueView, _CataloguePersoView, CommandeView,
 )
-from bot.views.vendeur_view import VendeurView
+from bot.views.vendeur_view import VendeurView, VendeurDecisionView
 from bot.views.objectif_views import ObjectifView
 from bot.views.giveaway_view import GiveawayView
 from bot.utils.invites import init_invite_cache
@@ -113,6 +113,21 @@ async def on_ready():
     except Exception as e:
         print(f"[READY] Erreur add_view VenduView : {e}")
 
+    # Restaure les boutons ✅/❌ sur les tickets vendeur encore ouverts après un redémarrage
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            topic = getattr(channel, "topic", None) or ""
+            if topic.startswith("vendeur_certifie"):
+                parts = topic.split("|")
+                try:
+                    membre_id = int(parts[1]) if len(parts) > 1 else None
+                except ValueError:
+                    membre_id = None
+                try:
+                    bot.add_view(VendeurDecisionView(membre_id))
+                except Exception as e:
+                    print(f"[READY] Erreur add_view VendeurDecisionView ({channel.name}) : {e}")
+
     await init_invite_cache()
 
     if not _core._on_ready_done:
@@ -144,6 +159,15 @@ async def on_ready():
         asyncio.create_task(weekly_loop())
         from bot.utils.voice_inactivity import voice_inactivity_loop
         asyncio.create_task(voice_inactivity_loop(bot))
+
+        # Sync des slash commands (ex: /recherche avec autocomplete) — une fois par démarrage.
+        # La propagation peut prendre jusqu'à 1h en sync globale ; c'est normal.
+        try:
+            synced = await bot.tree.sync()
+            print(f"[READY] {len(synced)} slash command(s) synchronisée(s)")
+        except Exception as e:
+            print(f"[READY] Erreur sync slash commands : {e}")
+
         print("[BOT] Prêt !")
     else:
         await _restore_active_giveaway_views()

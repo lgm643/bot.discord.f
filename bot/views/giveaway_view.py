@@ -14,7 +14,7 @@ from pathlib import Path
 import discord
 from discord.ext import commands
 
-from bot.core import active_giveaways
+from bot.core import bot, active_giveaways
 from bot.utils.helpers import now_utc
 
 
@@ -34,13 +34,73 @@ def build_giveaway_embed(gw):
         desc += f"📨 **Condition :** avoir invité **{min_invites} membre(s) actif(s)** sur le serveur\n"
     desc += "\n> Clique sur **🎉 Participer** pour tenter ta chance !\n> Reclique pour **te retirer**."
 
+    titre_emoji = "🎉"
+    guild_id = gw.get("guild_id")
+    if guild_id:
+        guild = bot.get_guild(guild_id)
+        if guild:
+            from bot.utils.emojis import get_emoji
+            titre_emoji = get_emoji(guild, "giveaway")
+
     embed = discord.Embed(
-        title="🎉 GIVEAWAY EN COURS",
+        title=f"{titre_emoji} GIVEAWAY EN COURS",
         description=desc,
         color=0xF1C40F
     )
     embed.set_footer(text=f"Organisé par {gw['host']}")
     return embed
+
+
+PARTICIPANTS_PAR_PAGE = 20
+
+
+class _ParticipantsView(discord.ui.View):
+    """Vue éphémère paginée listant les participants d'un giveaway."""
+
+    def __init__(self, guild: discord.Guild, participant_ids: list[int]):
+        super().__init__(timeout=120)
+        self.guild = guild
+        # Dédupliqué, ordre d'inscription conservé
+        self.ids  = list(dict.fromkeys(participant_ids))
+        self.page = 0
+        self.pages = [
+            self.ids[i:i + PARTICIPANTS_PAR_PAGE]
+            for i in range(0, len(self.ids), PARTICIPANTS_PAR_PAGE)
+        ] or [[]]
+        self._sync_buttons()
+
+    def _sync_buttons(self):
+        self.prev_page.disabled = self.page == 0
+        self.next_page.disabled = self.page >= len(self.pages) - 1
+
+    def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="👥 Participants au giveaway",
+            description=f"**{len(self.ids)}** participant(s) · Page **{self.page + 1}**/**{len(self.pages)}**",
+            color=0xF1C40F,
+        )
+        page_ids = self.pages[self.page]
+        if not page_ids:
+            embed.add_field(name="📭 Aucun participant", value="—", inline=False)
+        else:
+            lignes = []
+            for i, uid in enumerate(page_ids, start=self.page * PARTICIPANTS_PAR_PAGE + 1):
+                m = self.guild.get_member(uid)
+                lignes.append(f"`{i}.` {m.mention if m else f'<@{uid}>'}")
+            embed.add_field(name="📋 Liste", value="\n".join(lignes), inline=False)
+        return embed
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.grey)
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page -= 1
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.grey)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page += 1
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 
 class GiveawayView(discord.ui.View):
@@ -54,6 +114,22 @@ class GiveawayView(discord.ui.View):
         )
         btn.callback = self._participer_callback
         self.add_item(btn)
+
+        voir_btn = discord.ui.Button(
+            label="👥 Voir les participants",
+            style=discord.ButtonStyle.grey,
+            custom_id=f"giveaway_participants_{msg_id}",
+        )
+        voir_btn.callback = self._voir_participants_callback
+        self.add_item(voir_btn)
+
+    async def _voir_participants_callback(self, interaction: discord.Interaction):
+        gw = active_giveaways.get(self.msg_id)
+        if not gw:
+            await interaction.response.send_message("❌ Ce giveaway est terminé.", ephemeral=True)
+            return
+        view = _ParticipantsView(interaction.guild, gw.get("participants", []))
+        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=True)
 
     async def _participer_callback(self, interaction: discord.Interaction):
         gw = active_giveaways.get(self.msg_id)

@@ -174,3 +174,14 @@ def _parse_prix_num(prix: str):
         try: return float(nums[0].replace(",", "."))
         except ValueError: pass
     return None
+
+def item_categorie(item: dict) -> str:
+    return item.get("categorie") or "Divers"
+
+PRIX_BUCKETS = [
+    ("moins_100",   "💰 < 100",         lambda v: v is not None and v < 100),
+    ("100_500",     "💰 100 – 500",     lambda v: v is not None and 100 <= v < 500),
+    ("500_1000",    "💰 500 – 1000",    lambda v: v is not None and 500 <= v < 1000),
+    ("1000_5000",   "💰 1000 – 5000",   lambda v: v is not None and 1000 <= v < 5000),
+    ("plus_5000",   "💰 > 5000",        lambda v: v is not None and v >= 5000),
+]

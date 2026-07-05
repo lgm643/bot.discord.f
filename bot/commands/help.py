@@ -77,6 +77,11 @@ def _help_embed_general() -> discord.Embed:
         value="Affiche ce menu d'aide interactif.",
         inline=False
     )
+    embed.add_field(
+        name="⚙️ `!preferences` · alias : `!prefs` `!notifdm` `!embedmode`",
+        value="Gère tes notifs DM (giveaways/candidature) et le mode d'affichage compact des embeds.",
+        inline=False
+    )
     embed.set_footer(text="👤 = accessible à tous sauf mentions 🔒")
     return embed
 
@@ -128,8 +133,14 @@ def _help_embed_tickets() -> discord.Embed:
         value=(
             "Poste le panneau de tickets avec 2 boutons :\n"
             "• **📋 Demande de recrutement** → ticket + formulaire complet\n"
-            "• **📩 Autre demande** → ticket libre"
+            "• **📩 Autre demande** → ticket libre\n"
+            "Mode salon ou thread privé selon `!ticketsmode`."
         ),
+        inline=False
+    )
+    embed.add_field(
+        name="🧵 `!ticketsmode [channels|threads]` 🔒",
+        value="Bascule les tickets recrutement/support entre salons dédiés et threads privés.",
         inline=False
     )
     embed.add_field(
@@ -154,7 +165,8 @@ def _help_embed_tickets() -> discord.Embed:
         name="✅ `!accepter [raison]` 🔒",
         value=(
             "Dans un ticket vendeur : accepte la demande et attribue le rôle **Vendeur Certifié**.\n"
-            "**Usage :** `!accepter Stock suffisant, profil sérieux`"
+            "**Usage :** `!accepter Stock suffisant, profil sérieux`\n"
+            "💡 Les boutons ✅/❌ sur le ticket font la même chose sans taper de commande."
         ),
         inline=False
     )
@@ -190,13 +202,14 @@ def _help_embed_marche() -> discord.Embed:
         inline=False
     )
     embed.add_field(
-        name="➕ `!catalogue <nom> <quantité> <prix>` 🏷️",
+        name="➕ `!catalogue <nom> <quantité> <prix> [--cat <catégorie>]` 🏷️",
         value=(
             "Ajoute ou met à jour un article dans le catalogue.\n"
-            "**Usage :** `!catalogue paladium ingot 10 500$`\n"
+            "**Usage :** `!catalogue paladium ingot 10 500$ --cat Ressources`\n"
             "⚠️ La **quantité** (entier sans symbole) doit toujours précéder le **prix**.\n"
             "Si l'article existe déjà, le stock est additionné et le prix mis à jour.\n"
-            "Alerte si ton prix est plus cher qu'un concurrent."
+            "Alerte si ton prix est plus cher qu'un concurrent.\n"
+            "La catégorie (facultative, 'Divers' par défaut) permet de filtrer via 🔽 Parcourir."
         ),
         inline=False
     )
@@ -463,6 +476,11 @@ def _help_embed_config() -> discord.Embed:
             "Menus déroulants pour configurer salons, rôles, catégories et sécurité.\n"
             "Aucune syntaxe à retenir."
         ),
+        inline=False
+    )
+    embed.add_field(
+        name="🎨 `!emoji [clé] [emoji|reset]`",
+        value="Personnalise les emojis custom du bot (market, giveaway, vendeur, ticket…). Sans argument, liste les clés disponibles.",
         inline=False
     )
     embed.add_field(
