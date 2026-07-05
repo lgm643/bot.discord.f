@@ -108,7 +108,7 @@ def parse_membre_id_from_topic(topic: str) -> int | None:
         return None
 
 
-@bot.command(name="vendeur")
+@bot.hybrid_command(name="vendeur")
 async def vendeur_cmd(ctx):
     """Poste l'embed de candidature Vendeur Certifié dans le salon dédié."""
     if not is_staff(ctx.author):
@@ -145,7 +145,7 @@ async def vendeur_cmd(ctx):
     await ctx.send(f"✅ Embed vendeur posté dans {channel.mention} !", delete_after=5)
 
 
-@bot.command(name="accepter")
+@bot.hybrid_command(name="accepter")
 async def accepter_cmd(ctx, *, raison: str = "Demande acceptée par le staff."):
     """Accepte une demande vendeur dans un ticket vendeur. (Astuce : un bouton ✅ fait pareil sans taper de commande.)"""
     if not is_staff(ctx.author):
@@ -159,7 +159,7 @@ async def accepter_cmd(ctx, *, raison: str = "Demande acceptée par le staff."):
     await process_acceptation(ctx.guild, ctx.channel, membre_id, ctx.author, raison)
 
 
-@bot.command(name="refuser")
+@bot.hybrid_command(name="refuser")
 async def refuser_cmd(ctx, *, raison: str = "Demande refusée par le staff."):
     """Refuse une demande vendeur dans un ticket vendeur. (Astuce : un bouton ❌ fait pareil sans taper de commande.)"""
     if not is_staff(ctx.author):

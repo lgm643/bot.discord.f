@@ -21,7 +21,7 @@ from bot.utils.helpers import (
 )
 
 
-@bot.command(name="level", aliases=["lvl", "xp"])
+@bot.hybrid_command(name="level", aliases=["lvl", "xp"])
 async def level_cmd(ctx, member: discord.Member = None):
     member   = member or ctx.author
     data     = load_user_data(ctx.guild.id)
@@ -40,7 +40,7 @@ async def level_cmd(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 
-@bot.command(name="pileouface", aliases=["pof", "coinflip"])
+@bot.hybrid_command(name="pileouface", aliases=["pof", "coinflip"])
 async def pof_cmd(ctx):
     result = random.choice(["🪙 **Pile**", "🔵 **Face**"])
     await ctx.send(embed=discord.Embed(title="🪙 Pile ou Face", description=f"Résultat : {result}", color=0xF1C40F))

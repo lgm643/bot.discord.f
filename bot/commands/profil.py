@@ -94,7 +94,7 @@ def _get_rank(guild_id: int, user_id: int) -> tuple[int, int]:
 
 # ── Commande ──────────────────────────────────────────────────────────────────
 
-@bot.command(name="profil", aliases=["profile", "p"])
+@bot.hybrid_command(name="profil", aliases=["profile", "p"])
 async def profil_cmd(ctx, member: discord.Member = None):
     member = member or ctx.author
     guild  = ctx.guild

@@ -10,7 +10,7 @@ from bot.core import bot
 from bot.utils.config import cfg_role
 
 
-@bot.command(name="rolegw", aliases=["gwrole", "giveawayrole"])
+@bot.hybrid_command(name="rolegw", aliases=["gwrole", "giveawayrole"])
 async def rolegw_cmd(ctx):
     """Toggle du rôle notifications giveaways."""
     role = cfg_role(ctx.guild, "role_giveaway_notif")

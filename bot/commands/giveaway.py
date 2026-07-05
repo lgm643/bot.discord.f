@@ -52,7 +52,7 @@ def parse_duration(s):
     return total if total > 0 else None
 
 
-@bot.command(name="giveaway", aliases=["gw"])
+@bot.hybrid_command(name="giveaway", aliases=["gw"])
 async def giveaway_cmd(ctx, duree: str = None, *, reward: str = None):
     """
     !giveaway <durée> <récompense> [--invites N] [--gagnants N]
@@ -189,7 +189,7 @@ async def _end_giveaway(gw_id, delay, channel, reward):
         print(f"[GW] Erreur fin giveaway : {e}")
 
 
-@bot.command(name="reroll")
+@bot.hybrid_command(name="reroll")
 async def reroll_cmd(ctx, message_id: str = None):
     """
     Relance un giveaway terminé : !reroll <messageID>

@@ -149,7 +149,7 @@ async def _pendu_timeout_task(guild_id: int, channel_id: int):
 
 # ── Commandes Pendu ──────────────────────────────────────────────────────────
 
-@bot.command(name="pendu")
+@bot.hybrid_command(name="pendu")
 async def pendu_cmd(ctx):
     gid = ctx.guild.id
     if gid in _pendu_games:
@@ -222,7 +222,7 @@ async def pendu_cmd(ctx):
     await ctx.send(embed=embed)
 
 
-@bot.command(name="devine")
+@bot.hybrid_command(name="devine")
 async def devine_cmd(ctx, lettre: str = ""):
     gid  = ctx.guild.id
     game = _pendu_games.get(gid)
@@ -289,7 +289,7 @@ async def devine_cmd(ctx, lettre: str = ""):
             await ctx.send(embed=embed)
 
 
-@bot.command(name="mot")
+@bot.hybrid_command(name="mot")
 async def mot_cmd(ctx, *, tentative: str = ""):
     gid  = ctx.guild.id
     game = _pendu_games.get(gid)
@@ -342,7 +342,7 @@ async def mot_cmd(ctx, *, tentative: str = ""):
             await ctx.send(embed=embed)
 
 
-@bot.command(name="pendustop")
+@bot.hybrid_command(name="pendustop")
 async def pendustop_cmd(ctx):
     if not is_staff(ctx.author):
         await ctx.send("❌ Cette commande est réservée au **staff**.", delete_after=6)
@@ -662,7 +662,7 @@ class _ConfirmMorpionView(discord.ui.View):
 
 # ── Commandes Morpion ────────────────────────────────────────────────────────
 
-@bot.command(name="morpion")
+@bot.hybrid_command(name="morpion")
 async def morpion_cmd(ctx, adversaire: discord.Member = None):
     gid = ctx.guild.id
 
@@ -745,7 +745,7 @@ async def morpion_cmd(ctx, adversaire: discord.Member = None):
         pass
 
 
-@bot.command(name="morpionstop")
+@bot.hybrid_command(name="morpionstop")
 async def morpionstop_cmd(ctx):
     if not is_staff(ctx.author):
         await ctx.send("❌ Cette commande est réservée au **staff**.", delete_after=6)

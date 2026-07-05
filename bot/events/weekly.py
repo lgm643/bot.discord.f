@@ -177,7 +177,7 @@ async def send_weekly_report(guild: discord.Guild):
     reset_weekly_stats(guild.id)
 
 
-@bot.command(name="hebdo", aliases=["classementsemaine", "weekly"])
+@bot.hybrid_command(name="hebdo", aliases=["classementsemaine", "weekly"])
 async def hebdo_cmd(ctx):
     """Affiche le classement hebdomadaire actuel — réservé au staff."""
     from bot.utils.permissions import is_staff

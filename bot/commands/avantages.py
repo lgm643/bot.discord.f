@@ -66,7 +66,7 @@ def build_avantages_embed(guild: discord.Guild) -> discord.Embed:
 #  COMMANDE
 # ═══════════════════════════════════════════════════════════════
 
-@bot.command(name="avantages")
+@bot.hybrid_command(name="avantages")
 async def avantages_cmd(ctx):
     guild  = ctx.guild
     cfg    = load_config(guild.id)
@@ -82,7 +82,8 @@ async def avantages_cmd(ctx):
     else:
         await ctx.send(embed=embed)
 
-    try:
-        await ctx.message.delete()
-    except discord.Forbidden:
-        pass
+    if ctx.interaction is None:
+        try:
+            await ctx.message.delete()
+        except discord.Forbidden:
+            pass

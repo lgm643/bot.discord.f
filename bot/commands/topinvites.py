@@ -8,7 +8,7 @@ from bot.utils.invite_stats import get_top_inviters_active
 MEDALS = ["🥇", "🥈", "🥉"]
 
 
-@bot.command(name="topinvites")
+@bot.hybrid_command(name="topinvites")
 async def topinvites_cmd(ctx):
     """Classement des 10 meilleurs inviteurs (invitations actives)."""
     guild = ctx.guild

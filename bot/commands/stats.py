@@ -17,7 +17,7 @@ def _fmt_monthly(value, fmt_fn=None) -> str:
     return fmt_fn(value) if fmt_fn else str(value)
 
 
-@bot.command(name="statsserveur", aliases=["stats", "serverstats", "statistiques"])
+@bot.hybrid_command(name="statsserveur", aliases=["stats", "serverstats", "statistiques"])
 async def statsserveur_cmd(ctx):
     async with ctx.typing():
         try:

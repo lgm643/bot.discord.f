@@ -1,15 +1,22 @@
 """
 commands/customisation.py — !emoji (emojis custom du bot) et !ticketsmode (channels/threads).
 """
+from typing import Literal
+
 import discord
+from discord import app_commands
 
 from bot.core import bot
 from bot.utils.permissions import is_staff
 from bot.utils.emojis import DEFAULT_EMOJIS, get_emoji, set_emoji, reset_emoji
 from bot.utils.config import load_config, save_config
 
+_EMOJI_CHOICES = [app_commands.Choice(name=k, value=k) for k in DEFAULT_EMOJIS]
 
-@bot.command(name="emoji")
+
+@bot.hybrid_command(name="emoji")
+@app_commands.choices(cle=_EMOJI_CHOICES)
+@app_commands.describe(cle="Quel emoji personnaliser", valeur="Le nouvel emoji, ou 'reset' pour revenir par défaut")
 async def emoji_cmd(ctx, cle: str = None, *, valeur: str = None):
     """
     !emoji                     → liste les emojis configurables et leur valeur actuelle
@@ -48,7 +55,12 @@ async def emoji_cmd(ctx, cle: str = None, *, valeur: str = None):
     await ctx.send(f"✅ Emoji `{cle}` mis à jour → {valeur.strip()}", delete_after=6)
 
 
-@bot.command(name="ticketsmode")
+@bot.hybrid_command(name="ticketsmode")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="channels — salons dédiés (défaut)", value="channels"),
+    app_commands.Choice(name="threads — threads privés", value="threads"),
+])
+@app_commands.describe(mode="Où créer les tickets recrutement/support")
 async def ticketsmode_cmd(ctx, mode: str = None):
     """
     !ticketsmode                 → affiche le mode actuel

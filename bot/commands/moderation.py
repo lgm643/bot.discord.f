@@ -16,7 +16,7 @@ from discord.ext import commands
 
 from bot.core import bot
 
-@bot.command(name="ticket", aliases=["tickets", "support"])
+@bot.hybrid_command(name="ticket", aliases=["tickets", "support"])
 async def ticket(ctx):
     if not is_staff(ctx.author):
         await ctx.send("❌ Permission refusée.", delete_after=5); return
@@ -24,7 +24,7 @@ async def ticket(ctx):
     await ctx.send(embed=embed, view=TicketView())
 
 
-@bot.command(name="fermer", aliases=["close", "closeticket", "fermeticket"])
+@bot.hybrid_command(name="fermer", aliases=["close", "closeticket", "fermeticket"])
 async def fermer(ctx):
     if "ticket-" not in ctx.channel.name:
         await ctx.send("❌ Uniquement dans un ticket.", delete_after=5); return
@@ -36,7 +36,7 @@ async def fermer(ctx):
     await view.wait()
 
 
-@bot.command(name="roster", aliases=["membres", "liste", "faction"])
+@bot.hybrid_command(name="roster", aliases=["membres", "liste", "faction"])
 async def roster(ctx):
     if not is_staff(ctx.author):
         await ctx.send("❌ Permission refusée.", delete_after=5); return
@@ -59,7 +59,7 @@ async def roster(ctx):
 #  MODÉRATION
 # ═══════════════════════════════════════════════════════════════
 
-@bot.command(name="ban", aliases=["bannir", "expulser_def"])
+@bot.hybrid_command(name="ban", aliases=["bannir", "expulser_def"])
 async def ban(ctx, member: discord.Member = None, *, reason: str = "Aucune raison fournie"):
     if not is_staff(ctx.author): await ctx.send("❌ Permission refusée.", delete_after=5); return
     if member is None: await ctx.send("❌ `!ban @membre raison`", delete_after=5); return
@@ -74,7 +74,7 @@ async def ban(ctx, member: discord.Member = None, *, reason: str = "Aucune raiso
     except discord.Forbidden: await ctx.send("❌ Je ne peux pas bannir ce membre.", delete_after=5)
 
 
-@bot.command(name="kick", aliases=["expulser", "virer"])
+@bot.hybrid_command(name="kick", aliases=["expulser", "virer"])
 async def kick(ctx, member: discord.Member = None, *, reason: str = "Aucune raison fournie"):
     if not is_staff(ctx.author): await ctx.send("❌ Permission refusée.", delete_after=5); return
     if member is None: await ctx.send("❌ `!kick @membre raison`", delete_after=5); return
@@ -102,7 +102,7 @@ def _parse_mute_duration(s: str) -> int | None:
     return total if total > 0 else None
 
 
-@bot.command(name="mute", aliases=["silence", "rendre_muet"])
+@bot.hybrid_command(name="mute", aliases=["silence", "rendre_muet"])
 async def mute(ctx, member: discord.Member = None, duree: str = None, *, reason: str = "Aucune raison fournie"):
     """
     !mute @membre [durée] [raison]
@@ -169,7 +169,7 @@ async def _schedule_unmute(guild: discord.Guild, member: discord.Member, mute_ro
         print(f"[MUTE] Auto-unmute échoué pour {member.id} : {e}")
 
 
-@bot.command(name="unmute", aliases=["desilence", "parler"])
+@bot.hybrid_command(name="unmute", aliases=["desilence", "parler"])
 async def unmute(ctx, member: discord.Member = None):
     if not is_staff(ctx.author): await ctx.send("❌ Permission refusée.", delete_after=5); return
     if member is None: await ctx.send("❌ `!unmute @membre`", delete_after=5); return
@@ -185,7 +185,7 @@ async def unmute(ctx, member: discord.Member = None):
     await send_log(ctx.guild, embed)
 
 
-@bot.command(name="effacer", aliases=["clear", "purge", "supprimer", "clean"])
+@bot.hybrid_command(name="effacer", aliases=["clear", "purge", "supprimer", "clean"])
 async def effacer(ctx, nombre: int = None):
     if not is_staff(ctx.author): await ctx.send("❌ Permission refusée.", delete_after=5); return
     if nombre is None: await ctx.send("❌ `!effacer 10`", delete_after=5); return
@@ -199,7 +199,7 @@ async def effacer(ctx, nombre: int = None):
     await send_log(ctx.guild, embed)
 
 
-@bot.command(name="info", aliases=["whois", "user", "membre"])
+@bot.hybrid_command(name="info", aliases=["whois", "user", "membre"])
 async def info(ctx, member: discord.Member = None):
     member   = member or ctx.author
     roles    = [r.mention for r in reversed(member.roles) if r.name != "@everyone"]
@@ -237,7 +237,7 @@ async def info(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 
-@bot.command(name="say", aliases=["dit"])
+@bot.hybrid_command(name="say", aliases=["dit"])
 async def say_cmd(ctx, channel: discord.TextChannel = None, *, message: str = None):
     if not is_staff(ctx.author): await ctx.send("❌ Réservé au staff.", delete_after=5); return
     if channel is None or message is None: await ctx.send("❌ Utilisation : `!say #salon message`", delete_after=8); return

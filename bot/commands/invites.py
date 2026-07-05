@@ -20,7 +20,7 @@ from discord.ext import commands
 
 from bot.core import bot
 
-@bot.command(name="invite")
+@bot.hybrid_command(name="invite")
 async def invite_cmd(ctx, *, pseudo: str = None):
     """
     Affiche le nombre d'invitations d'un joueur et la liste des membres invités.

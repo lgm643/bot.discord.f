@@ -567,7 +567,7 @@ class HelpView(discord.ui.View):
                 pass
 
 
-@bot.command(name="help", aliases=["aide", "commandes"])
+@bot.hybrid_command(name="help", aliases=["aide", "commandes"])
 async def help_cmd(ctx):
     staff = is_staff(ctx.author)
     embed = _help_embed_accueil(staff)

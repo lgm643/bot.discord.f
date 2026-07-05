@@ -18,7 +18,7 @@ from bot.core import bot
 from bot.utils.helpers import load_user_data, now_utc, fmt_voice  # FIX : fmt_voice ajouté
 from bot.utils.config import load_config
 
-@bot.command(name="classement", aliases=["top", "leaderboard", "lb", "rang", "ranking"])
+@bot.hybrid_command(name="classement", aliases=["top", "leaderboard", "lb", "rang", "ranking"])
 async def classement_cmd(ctx):
     gid    = ctx.guild.id
     data   = load_user_data(gid)

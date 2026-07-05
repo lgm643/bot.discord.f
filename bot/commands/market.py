@@ -22,11 +22,12 @@ from collections import defaultdict
 from pathlib import Path
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from bot.core import bot, _commande_msg_ids, _catalogue_msg_ids
 
-@bot.command(name="gestion")
+@bot.hybrid_command(name="gestion")
 async def gestion_cmd(ctx):
     if not is_vendeur(ctx.author):
         await ctx.send("❌ Réservé aux vendeurs certifiés.", delete_after=5); return
@@ -114,7 +115,7 @@ async def gestion_cmd(ctx):
     await send_notif(ctx.guild, action)
     await send_log(ctx.guild, discord.Embed(title="📦 Stock mis à jour via !gestion", description=action, color=0x2ECC71, timestamp=now_utc()))
     await ctx.send(embed=discord.Embed(title="✅ Article enregistré", description=f"**{nom}** — x{qty} à {prix}", color=0x2ECC71, timestamp=now_utc()), delete_after=10)
-@bot.command(name="catalogue")
+@bot.hybrid_command(name="catalogue")
 async def catalogue_cmd(ctx, *, args: str = None):
     if not is_vendeur(ctx.author):
         await ctx.send(embed=discord.Embed(title="❌ Permission insuffisante", description="Réservé aux vendeurs certifiés.", color=0xE74C3C), delete_after=5)
@@ -205,7 +206,7 @@ async def catalogue_cmd(ctx, *, args: str = None):
     await ctx.send(embed=discord.Embed(title="✅ Catalogue mis à jour", description=f"**{nom}** — x{qty} à {prix}", color=0x2ECC71), delete_after=8)
 
 
-@bot.command(name="cataloguesupp")
+@bot.hybrid_command(name="cataloguesupp")
 async def cataloguesupp_cmd(ctx):
     if not is_vendeur(ctx.author):
         await ctx.send(embed=discord.Embed(title="❌ Permission insuffisante", description="Réservé aux vendeurs certifiés.", color=0xE74C3C), delete_after=5)
@@ -292,7 +293,7 @@ async def cataloguesupp_cmd(ctx):
 
 
 
-@bot.command(name="cataloguesuppall")
+@bot.hybrid_command(name="cataloguesuppall")
 async def cataloguesuppall_cmd(ctx):
     if not is_staff(ctx.author):
         await ctx.send(embed=discord.Embed(title="❌ Permission insuffisante", description="Cette commande est réservée au staff.", color=0xE74C3C), delete_after=5)
@@ -323,7 +324,7 @@ async def cataloguesuppall_cmd(ctx):
     await ctx.send(embed=discord.Embed(title="✅ Catalogue entièrement supprimé", description=f"**{nb} article(s)** ont été supprimés.", color=0x2ECC71), delete_after=10)
 
 
-@bot.command(name="stock")
+@bot.hybrid_command(name="stock")
 async def stock_cmd(ctx, cible: discord.Member = None):
     catalogue_ch = cfg_channel(ctx.guild, "salon_catalogue")
     in_catalogue = catalogue_ch and ctx.channel.id == catalogue_ch.id
@@ -354,7 +355,27 @@ async def stock_cmd(ctx, cible: discord.Member = None):
         await ctx.send(embed=embed)
 
 
-@bot.command(name="recherche")
+async def _terme_autocomplete(interaction: discord.Interaction, current: str) -> list:
+    if not interaction.guild:
+        return []
+    data  = load_catalogue(interaction.guild.id)
+    items = data.get("items", {})
+    if not current:
+        noms = sorted({v["nom"] for v in items.values()})[:25]
+        return [app_commands.Choice(name=n[:100], value=n) for n in noms]
+    res = fuzzy_search(current, items)
+    noms_vus = []
+    for key, (item, score) in res.items():
+        if item["nom"] not in noms_vus:
+            noms_vus.append(item["nom"])
+        if len(noms_vus) >= 25:
+            break
+    return [app_commands.Choice(name=n[:100], value=n) for n in noms_vus]
+
+
+@bot.hybrid_command(name="recherche")
+@app_commands.autocomplete(terme=_terme_autocomplete)
+@app_commands.describe(terme="Nom de l'article — les suggestions apparaissent en tapant")
 async def recherche_cmd(ctx, *, terme: str = None):
     if terme is None: await ctx.send("❌ `!recherche [nom_item]`", delete_after=6); return
     recherche_ch = cfg_channel(ctx.guild, "salon_recherche")
@@ -385,7 +406,7 @@ async def recherche_cmd(ctx, *, terme: str = None):
             await ctx.send(f"{ctx.author.mention} Impossible d'envoyer le DM — active tes messages privés.", delete_after=8)
     else:
         await ctx.send(embed=embed)
-@bot.command(name="commande")
+@bot.hybrid_command(name="commande")
 async def commande_cmd(ctx):
     if not is_staff(ctx.author): await ctx.send("❌ Réservé au staff.", delete_after=5); return
 
@@ -429,7 +450,7 @@ async def commande_cmd(ctx):
     save_catalogue(ctx.guild.id, data)
 
     await ctx.send(f"✅ Embed de commande posté/mis à jour dans {cmd_ch.mention} !", delete_after=5)
-@bot.command(name="vendu")
+@bot.hybrid_command(name="vendu")
 async def vendu_cmd(ctx):
     topic = getattr(ctx.channel, "topic", None) or ""
     if not topic.startswith("commande|"):
@@ -457,7 +478,7 @@ async def vendu_cmd(ctx):
     await ctx.send(embed=embed, view=VenduView(ctx.guild.id, vendeur_id, nom_key, quantite, ctx.channel.id))
 
 
-@bot.command(name="role")
+@bot.hybrid_command(name="role")
 async def role_cmd(ctx):
     if not is_staff(ctx.author):
         await ctx.send("❌ Réservé au staff.", delete_after=5)
@@ -499,7 +520,7 @@ async def _log_vente(guild, acheteur_id, vendeur, nom, quantite, prix_unitaire):
 # ════════════════════════════════════════════════════════════════
 #  !catalogueview — poste l'embed catalogue permanent dans le salon dédié
 # ════════════════════════════════════════════════════════════════
-@bot.command(name="catalogueview")
+@bot.hybrid_command(name="catalogueview")
 async def catalogueview_cmd(ctx):
     """Poste l'embed catalogue permanent dans le salon catalogue configuré."""
     if not ctx.author.guild_permissions.administrator and not is_staff(ctx.author):
@@ -525,10 +546,11 @@ async def catalogueview_cmd(ctx):
     # Vue publique avec bouton "🔽 Trier / Parcourir" (timeout=None = persistant)
     view = CatalogueView()
 
-    try:
-        await ctx.message.delete()
-    except discord.Forbidden:
-        pass
+    if ctx.interaction is None:
+        try:
+            await ctx.message.delete()
+        except discord.Forbidden:
+            pass
 
     msg = await target.send(embed=embed, view=view)
 
@@ -568,7 +590,28 @@ class _SuppJoueurConfirmView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
 
-@bot.command(name="cataloguesuppjoueur")
+async def _vendeur_catalogue_autocomplete(interaction: discord.Interaction, current: str) -> list:
+    if not interaction.guild:
+        return []
+    data  = load_catalogue(interaction.guild.id)
+    items = data.get("items", {})
+    vendeur_ids = {v["vendeur_id"] for v in items.values()}
+    current_low = current.lower()
+    choix = []
+    for vid in vendeur_ids:
+        m = interaction.guild.get_member(vid)
+        if not m:
+            continue
+        if current_low in m.display_name.lower():
+            choix.append(app_commands.Choice(name=m.display_name[:100], value=str(m.id)))
+        if len(choix) >= 25:
+            break
+    return choix
+
+
+@bot.hybrid_command(name="cataloguesuppjoueur")
+@app_commands.autocomplete(cible=_vendeur_catalogue_autocomplete)
+@app_commands.describe(cible="Pseudo, @mention ou ID du vendeur")
 async def cataloguesuppjoueur_cmd(ctx, *, cible: str = None):
     """Supprime toutes les annonces d'un joueur (staff/admin uniquement)."""
     if not is_staff(ctx.author):

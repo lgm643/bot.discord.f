@@ -67,7 +67,7 @@ class _PreferencesView(discord.ui.View):
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
 
 
-@bot.command(name="preferences", aliases=["prefs", "notifdm", "embedmode"])
+@bot.hybrid_command(name="preferences", aliases=["prefs", "notifdm", "embedmode"])
 async def preferences_cmd(ctx):
     """Ouvre le panneau de préférences personnelles (DM + affichage)."""
     view = _PreferencesView(ctx.guild.id, ctx.author.id)
