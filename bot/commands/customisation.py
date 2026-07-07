@@ -93,3 +93,25 @@ async def ticketsmode_cmd(ctx, mode: str = None):
     cfg["tickets_mode"] = mode
     save_config(ctx.guild.id, cfg)
     await ctx.send(f"✅ Mode tickets : **{mode}**", delete_after=6)
+
+
+@bot.hybrid_command(name="relanceheures")
+@app_commands.describe(heures="Délai avant relance auto (0 = désactivé)")
+async def relanceheures_cmd(ctx, heures: int = None):
+    """Configure après combien d'heures un ticket recrutement sans réponse propose une relance."""
+    if not is_staff(ctx.author):
+        await ctx.send("❌ Réservé au staff.", delete_after=5)
+        return
+    cfg = load_config(ctx.guild.id)
+    if heures is None:
+        await ctx.send(f"⏰ Seuil de relance actuel : **{cfg.get('relance_ticket_heures', 2)}h** (0 = désactivé)", delete_after=8)
+        return
+    if heures < 0:
+        await ctx.send("❌ La valeur doit être ≥ 0.", delete_after=6)
+        return
+    cfg["relance_ticket_heures"] = heures
+    save_config(ctx.guild.id, cfg)
+    if heures == 0:
+        await ctx.send("✅ Relance automatique **désactivée**.", delete_after=6)
+    else:
+        await ctx.send(f"✅ Les tickets recrutement sans réponse depuis **{heures}h** proposeront une relance.", delete_after=6)
