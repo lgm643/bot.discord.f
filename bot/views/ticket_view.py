@@ -1,11 +1,13 @@
 import asyncio
 import discord
+import time
 
 from bot.core import bot
 
 from bot.utils.config import cfg_roles, cfg_role, cfg_category, cfg_channel, load_config
 from bot.utils.permissions import is_staff
 from bot.utils.tickets import send_ticket_log
+from bot.utils.database import db_save_ticket_meta, db_delete_ticket_meta
 
 
 async def _create_ticket_thread(guild: discord.Guild, parent: discord.TextChannel, name: str, creator: discord.Member, extra_members=None) -> discord.Thread:
@@ -26,6 +28,25 @@ async def _create_ticket_thread(guild: discord.Guild, parent: discord.TextChanne
         except Exception:
             pass
     return thread
+
+class RelanceRecruteurView(discord.ui.View):
+    """Posée automatiquement sur un ticket recrutement resté sans réponse. Bouton pour re-ping les recruteurs."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔄 Relancer les recruteurs", style=discord.ButtonStyle.blurple, custom_id="relance_recruteur")
+    async def relancer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruteur   = cfg_role(interaction.guild, "role_recruteur")
+        staff_roles = cfg_roles(interaction.guild, "role_staff")
+        ping = recruteur.mention if recruteur else (" ".join(r.mention for r in staff_roles) or "@Staff")
+        await interaction.response.send_message(f"🔔 {ping} — ce ticket attend toujours une réponse !")
+        try:
+            from bot.utils.database import db_update_ticket_relance
+            db_update_ticket_relance(interaction.channel.id, time.time())
+        except Exception:
+            pass
+
 
 class TicketView(discord.ui.View):
     def __init__(self):
@@ -75,6 +96,7 @@ class FermerView(discord.ui.View):
         self.stop()
         await interaction.response.edit_message(embed=discord.Embed(title="🔒 Fermeture en cours…", description="Suppression dans **5 secondes**.", color=0x2ECC71), view=self)
         await send_ticket_log(interaction.guild, interaction.channel, self.closer)
+        db_delete_ticket_meta(interaction.channel.id)
         await asyncio.sleep(5)
         try: await interaction.channel.delete()
         except discord.NotFound: pass
@@ -140,3 +162,8 @@ async def creer_ticket(interaction: discord.Interaction, type_ticket: str):
         texte = f"{ping} | {interaction.user.mention}\n\n📩 **Autre demande**\n\nExplique ta demande, un membre te répondra.\nPour fermer : `!fermer`"
     await channel.send(texte)
     await interaction.response.send_message(f"✅ Ticket créé : {channel.mention}", ephemeral=True)
+
+    try:
+        db_save_ticket_meta(channel.id, guild.id, type_ticket, interaction.user.id, time.time())
+    except Exception as e:
+        print(f"[TICKET] Erreur db_save_ticket_meta : {e}")

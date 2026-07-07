@@ -60,6 +60,14 @@ def init_db():
                 embed_mode     TEXT    NOT NULL DEFAULT 'full',
                 PRIMARY KEY (guild_id, user_id)
             );
+            CREATE TABLE IF NOT EXISTS ticket_meta (
+                channel_id     INTEGER PRIMARY KEY,
+                guild_id       INTEGER NOT NULL,
+                type_ticket    TEXT    NOT NULL,
+                creator_id     INTEGER NOT NULL,
+                created_at     REAL    NOT NULL,
+                last_relance_at REAL   NOT NULL DEFAULT 0
+            );
         """)
         # Migration : ajoute invited_name si la table existait sans cette colonne
         try:
@@ -153,3 +161,36 @@ def db_set_user_pref(guild_id: int, user_id: int, **kwargs):
                        embed_mode=excluded.embed_mode""",
             (guild_id, user_id, int(current["dm_giveaway"]), int(current["dm_candidature"]), current["embed_mode"])
         )
+
+
+# ═══════════════════════════════════════════════════════════════
+#  TICKET META — SQLITE
+#  (tracking pour la relance auto des tickets recrutement sans reponse)
+# ═══════════════════════════════════════════════════════════════
+
+def db_save_ticket_meta(channel_id: int, guild_id: int, type_ticket: str, creator_id: int, created_at: float):
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO ticket_meta (channel_id, guild_id, type_ticket, creator_id, created_at, last_relance_at) VALUES (?,?,?,?,?,0)",
+            (channel_id, guild_id, type_ticket, creator_id, created_at)
+        )
+
+
+def db_get_open_tickets(guild_id: int, type_ticket: str | None = None) -> list:
+    with get_db() as conn:
+        if type_ticket:
+            return conn.execute(
+                "SELECT * FROM ticket_meta WHERE guild_id=? AND type_ticket=?",
+                (guild_id, type_ticket)
+            ).fetchall()
+        return conn.execute("SELECT * FROM ticket_meta WHERE guild_id=?", (guild_id,)).fetchall()
+
+
+def db_update_ticket_relance(channel_id: int, ts: float):
+    with get_db() as conn:
+        conn.execute("UPDATE ticket_meta SET last_relance_at=? WHERE channel_id=?", (ts, channel_id))
+
+
+def db_delete_ticket_meta(channel_id: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM ticket_meta WHERE channel_id=?", (channel_id,))
