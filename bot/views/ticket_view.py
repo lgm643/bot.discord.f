@@ -1,6 +1,6 @@
 import asyncio
-import discord
 import time
+import discord
 
 from bot.core import bot
 
@@ -37,15 +37,34 @@ class RelanceRecruteurView(discord.ui.View):
 
     @discord.ui.button(label="🔄 Relancer les recruteurs", style=discord.ButtonStyle.blurple, custom_id="relance_recruteur")
     async def relancer(self, interaction: discord.Interaction, button: discord.ui.Button):
-        recruteur   = cfg_role(interaction.guild, "role_recruteur")
-        staff_roles = cfg_roles(interaction.guild, "role_staff")
-        ping = recruteur.mention if recruteur else (" ".join(r.mention for r in staff_roles) or "@Staff")
-        await interaction.response.send_message(f"🔔 {ping} — ce ticket attend toujours une réponse !")
         try:
-            from bot.utils.database import db_update_ticket_relance
-            db_update_ticket_relance(interaction.channel.id, time.time())
-        except Exception:
-            pass
+            recruteur   = cfg_role(interaction.guild, "role_recruteur")
+            staff_roles = cfg_roles(interaction.guild, "role_staff")
+            if recruteur:
+                ping = recruteur.mention
+            elif staff_roles:
+                ping = " ".join(r.mention for r in staff_roles)
+            else:
+                ping = "@Staff"
+                print(f"[RELANCE] Aucun role_recruteur/role_staff configuré sur guild={interaction.guild.id} (voir !config)")
+
+            await interaction.response.send_message(f"🔔 {ping} — ce ticket attend toujours une réponse !")
+
+            try:
+                from bot.utils.database import db_update_ticket_relance
+                db_update_ticket_relance(interaction.channel.id, time.time())
+            except Exception as e:
+                print(f"[RELANCE] Erreur db_update_ticket_relance : {e}")
+
+        except Exception as e:
+            print(f"[RELANCE] Erreur bouton relancer : {e}")
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send("❌ Erreur lors de la relance, réessaie ou contacte un admin.", ephemeral=True)
+                else:
+                    await interaction.response.send_message("❌ Erreur lors de la relance, réessaie ou contacte un admin.", ephemeral=True)
+            except Exception:
+                pass
 
 
 class TicketView(discord.ui.View):
