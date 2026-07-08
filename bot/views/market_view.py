@@ -10,6 +10,7 @@ from bot.core import _pending_orders
 from bot.utils.market import (
     load_catalogue, save_catalogue, fuzzy_search, _clean_ghost_items,
     update_catalogue_message, send_notif, _parse_prix_num, item_categorie, PRIX_BUCKETS,
+    _item_key,
 )
 from bot.utils.config import cfg_category, cfg_channel, cfg_role, load_config
 from bot.utils.permissions import is_staff, is_vendeur
@@ -762,6 +763,7 @@ class _CatalogueTriSelect(discord.ui.Select):
             view.tri_actif = self.values[0]
             view.page      = 0
             view._rebuild_pages()
+            view._sync_commande_select()
             view._sync_buttons()
             await interaction.response.edit_message(embed=view.build_embed(), view=view)
         except Exception as e:
@@ -791,6 +793,7 @@ class _CatalogueCategorieSelect(discord.ui.Select):
             view.categorie_filtre = None if self.values[0] == "__toutes__" else self.values[0]
             view.page = 0
             view._rebuild_pages()
+            view._sync_commande_select()
             view._sync_buttons()
             await interaction.response.edit_message(embed=view.build_embed(), view=view)
         except Exception as e:
@@ -817,11 +820,66 @@ class _CataloguePrixSelect(discord.ui.Select):
             view.prix_filtre = None if self.values[0] == "__tous__" else self.values[0]
             view.page = 0
             view._rebuild_pages()
+            view._sync_commande_select()
             view._sync_buttons()
             await interaction.response.edit_message(embed=view.build_embed(), view=view)
         except Exception as e:
             try:
                 await interaction.response.send_message(embed=discord.Embed(title="❌ Erreur", description=str(e), color=0xE74C3C), ephemeral=True)
+            except Exception:
+                pass
+
+
+# ═══════════════════════════════════════════════════════════════
+# SELECT COMMANDER — passe commande directement depuis la page affichée
+# ═══════════════════════════════════════════════════════════════
+class _CatalogueCommanderSelect(discord.ui.Select):
+    def __init__(self, guild: discord.Guild, page_items: list):
+        options = []
+        for item in page_items[:25]:
+            key = _item_key(item["nom"], item["vendeur_id"])
+            vendeur_m = guild.get_member(item["vendeur_id"])
+            vnom = vendeur_m.display_name if vendeur_m else "?"
+            options.append(discord.SelectOption(
+                label=f"{item['nom'][:20]} ({item['prix'][:15]})"[:100],
+                value=key,
+                description=f"📦 {item['quantite']}x · 👤 {vnom}"[:100],
+            ))
+        if not options:
+            options = [discord.SelectOption(label="Aucun article sur cette page", value="__vide__")]
+        import uuid
+        super().__init__(
+            placeholder="🛒 Choisis un article à commander…",
+            options=options,
+            custom_id=f"cat_perso_commander_{uuid.uuid4().hex[:8]}",
+            row=4,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            key = self.values[0]
+            if key == "__vide__":
+                await interaction.response.send_message("📭 Aucun article disponible sur cette page.", ephemeral=True)
+                return
+            data = load_catalogue(interaction.guild.id)
+            item = data.get("items", {}).get(key)
+            if not item or item.get("quantite", 0) <= 0:
+                await interaction.response.send_message(
+                    embed=discord.Embed(title="❌ Article indisponible", description="Cet article n'est plus disponible.", color=0xE74C3C),
+                    ephemeral=True
+                )
+                return
+            await interaction.response.send_modal(_CatalogueQuantiteModal(interaction.guild, key, item))
+        except discord.NotFound:
+            pass
+        except discord.InteractionResponded:
+            pass
+        except Exception as e:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(f"❌ Erreur : {e}", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"❌ Erreur : {e}", ephemeral=True)
             except Exception:
                 pass
 
@@ -851,6 +909,7 @@ class _CataloguePersoView(discord.ui.View):
         if self.items:
             self.add_item(_CataloguePrixSelect())
         self._rebuild_pages()
+        self._sync_commande_select()
         self._sync_buttons()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -918,6 +977,15 @@ class _CataloguePersoView(discord.ui.View):
                 elif child.label == "▶":
                     child.disabled = self.page >= len(self.pages) - 1
 
+    def _sync_commande_select(self):
+        # Retire l'ancien select de commande (options liées à l'ancienne page) et le reconstruit
+        for child in list(self.children):
+            if isinstance(child, _CatalogueCommanderSelect):
+                self.remove_item(child)
+        page_items = self.pages[self.page] if self.pages else []
+        if page_items:
+            self.add_item(_CatalogueCommanderSelect(self.guild, page_items))
+
     # ── Embed ──────────────────────────────────────────────────
     def build_embed(self) -> discord.Embed:
         compact  = getattr(self, "compact", False)
@@ -955,7 +1023,7 @@ class _CataloguePersoView(discord.ui.View):
             if chunk: chunks.append(chunk)
             for idx, c in enumerate(chunks):
                 embed.add_field(name="📋" if idx == 0 else "\u200b", value=c, inline=False)
-            embed.set_footer(text="Mode compact · !preferences pour changer d'affichage")
+            embed.set_footer(text="Mode compact · 🛒 Choisis un article ci-dessous pour commander · !preferences pour changer d'affichage")
             return embed
 
         if self.tri_actif == "vendeur":
@@ -984,7 +1052,7 @@ class _CataloguePersoView(discord.ui.View):
             for idx, c in enumerate(chunks):
                 embed.add_field(name="📋 Articles" if idx == 0 else "\u200b", value=c, inline=False)
 
-        embed.set_footer(text="Visible uniquement par toi · 🔍 Rechercher pour trouver et commander un article")
+        embed.set_footer(text="Visible uniquement par toi · 🛒 Choisis un article ci-dessous pour commander directement")
         return embed
 
     # ── Boutons navigation + recherche ─────────────────────────
@@ -992,6 +1060,7 @@ class _CataloguePersoView(discord.ui.View):
     async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.page -= 1
+            self._sync_commande_select()
             self._sync_buttons()
             await interaction.response.edit_message(embed=self.build_embed(), view=self)
         except Exception as e:
@@ -1020,6 +1089,7 @@ class _CataloguePersoView(discord.ui.View):
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.page += 1
+            self._sync_commande_select()
             self._sync_buttons()
             await interaction.response.edit_message(embed=self.build_embed(), view=self)
         except Exception as e:
