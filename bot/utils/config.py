@@ -97,6 +97,11 @@ DEFAULT_CONFIG = {
     "tickets_mode":          "channels",   # "channels" ou "threads"
     "salon_tickets_parent":  "",           # salon texte parent pour les threads privés
     "relance_ticket_heures": 2,            # délai (h) avant proposition de relance recruteur
+    # ── Rappel vocal (membres/recrues inactifs en vocal) ──────────────────────
+    "rappel_vocal_enabled":  False,
+    "rappel_vocal_heures":   12,    # délai (h) sans vocal avant rappel, configurable via !config
+    "rappel_vocal_roles":    [],    # rôles concernés ; vide = utilise faction_roles
+    "salon_rappel_vocal":    "",    # salon où @ le membre si ses MP sont fermés
 }
 
 

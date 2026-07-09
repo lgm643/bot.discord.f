@@ -68,6 +68,13 @@ def init_db():
                 created_at     REAL    NOT NULL,
                 last_relance_at REAL   NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS voice_reminder (
+                guild_id         INTEGER NOT NULL,
+                user_id          INTEGER NOT NULL,
+                last_voice_at    REAL    NOT NULL DEFAULT 0,
+                last_reminder_at REAL    NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            );
         """)
         # Migration : ajoute invited_name si la table existait sans cette colonne
         try:
@@ -194,3 +201,44 @@ def db_update_ticket_relance(channel_id: int, ts: float):
 def db_delete_ticket_meta(channel_id: int):
     with get_db() as conn:
         conn.execute("DELETE FROM ticket_meta WHERE channel_id=?", (channel_id,))
+
+
+# ═══════════════════════════════════════════════════════════════
+#  RAPPEL VOCAL — SQLITE
+# ═══════════════════════════════════════════════════════════════
+
+def db_touch_voice_join(guild_id: int, user_id: int, ts: float):
+    """Reset le compteur d'un membre : appelé quand il rejoint un salon vocal."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO voice_reminder (guild_id, user_id, last_voice_at, last_reminder_at)
+            VALUES (?, ?, ?, 0)
+            ON CONFLICT(guild_id, user_id) DO UPDATE SET last_voice_at=excluded.last_voice_at
+        """, (guild_id, user_id, ts))
+
+
+def db_init_voice_reminder_if_missing(guild_id: int, user_id: int, ts: float):
+    """Première initialisation d'un membre suivi (pas de rappel immédiat)."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO voice_reminder (guild_id, user_id, last_voice_at, last_reminder_at)
+            VALUES (?, ?, ?, 0)
+        """, (guild_id, user_id, ts))
+
+
+def db_get_voice_reminder(guild_id: int, user_id: int):
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT * FROM voice_reminder WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id)
+        ).fetchone()
+
+
+def db_set_voice_reminder_sent(guild_id: int, user_id: int, ts: float):
+    """Marque qu'un rappel vient d'être envoyé (relance le délai de X heures)."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO voice_reminder (guild_id, user_id, last_voice_at, last_reminder_at)
+            VALUES (?, ?, 0, ?)
+            ON CONFLICT(guild_id, user_id) DO UPDATE SET last_reminder_at=excluded.last_reminder_at
+        """, (guild_id, user_id, ts))

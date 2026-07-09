@@ -157,6 +157,9 @@ async def on_ready():
         from bot.utils.ticket_relance import ticket_relance_loop
         asyncio.create_task(ticket_relance_loop(bot))
 
+        from bot.utils.voice_reminder import voice_reminder_loop
+        asyncio.create_task(voice_reminder_loop(bot))
+
         try:
             bot.add_view(RelanceRecruteurView())
         except Exception as e:
@@ -173,4 +176,4 @@ async def on_ready():
         print("[BOT] Prêt !")
     else:
         await _restore_active_giveaway_views()
-        print("[BOT] Reconnexion détectée — restauration des vues uniquement")
+        print("[BOT] Reconnexion détectée — restauration des vues uniquement")git add bot/utils/voice_reminder.py bot/utils/database.py bot/utils/config.py bot/utils/config_panel.py bot/events/logs_events.py bot/events/ready.py

@@ -512,6 +512,8 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     # ── Inactivité vocale ─────────────────────────────────────────
     if after.channel is not None:
         record_voice_activity(gid, uid)
+        from bot.utils.voice_reminder import touch_voice_join
+        touch_voice_join(gid, uid)
     else:
         clear_voice_activity(gid, uid)
 
