@@ -37,6 +37,16 @@ class RelanceRecruteurView(discord.ui.View):
 
     @discord.ui.button(label="🔄 Relancer les recruteurs", style=discord.ButtonStyle.blurple, custom_id="relance_recruteur")
     async def relancer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Anti-spam : si déjà désactivé (déjà utilisé), on ignore direct.
+        if button.disabled:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("⚠️ Ce bouton a déjà été utilisé.", ephemeral=True)
+            return
+
+        # On désactive tout de suite (avant tout await) pour éviter un double-clic
+        # quasi simultané qui passerait entre deux.
+        button.disabled = True
+
         try:
             recruteur   = cfg_role(interaction.guild, "role_recruteur")
             staff_roles = cfg_roles(interaction.guild, "role_staff")
@@ -48,7 +58,16 @@ class RelanceRecruteurView(discord.ui.View):
                 ping = "@Staff"
                 print(f"[RELANCE] Aucun role_recruteur/role_staff configuré sur guild={interaction.guild.id} (voir !config)")
 
-            await interaction.response.send_message(f"🔔 {ping} — ce ticket attend toujours une réponse !")
+            # 1) On grise le bouton sur CE message (persiste même après restart du bot,
+            #    car c'est stocké côté Discord sur le message).
+            await interaction.response.edit_message(view=self)
+
+            # 2) On envoie le vrai ping en followup, avec allowed_mentions explicite
+            #    pour être certain que le mention de rôle notifie bien.
+            await interaction.followup.send(
+                content=f"🔔 {ping} — ce ticket attend toujours une réponse !",
+                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+            )
 
             try:
                 from bot.utils.database import db_update_ticket_relance

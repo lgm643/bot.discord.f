@@ -74,7 +74,14 @@ async def _check_guild(guild: discord.Guild):
             color=0xE67E22,
         )
         try:
-            await channel.send(embed=embed, view=RelanceRecruteurView())
+            # Le ping doit être dans le "content" pour déclencher une vraie notif :
+            # un mention placé uniquement dans un embed ne notifie jamais personne.
+            await channel.send(
+                content=ping,
+                embed=embed,
+                view=RelanceRecruteurView(),
+                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+            )
             db_update_ticket_relance(channel_id, now)
         except Exception as e:
             print(f"[TICKET-RELANCE] Erreur envoi relance ({channel_id}) : {e}")
