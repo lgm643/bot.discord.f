@@ -176,4 +176,4 @@ async def on_ready():
         print("[BOT] Prêt !")
     else:
         await _restore_active_giveaway_views()
-        print("[BOT] Reconnexion détectée — restauration des vues uniquement")git add bot/utils/voice_reminder.py bot/utils/database.py bot/utils/config.py bot/utils/config_panel.py bot/events/logs_events.py bot/events/ready.py
+        print("[BOT] Reconnexion détectée — restauration des vues uniquement")
