@@ -54,6 +54,23 @@ def build_roster_embed(guild: discord.Guild) -> discord.Embed:
             embed.add_field(name=f"{cat['label']} ({len(cat['members'])})", value="\n".join(cat["members"]), inline=False)
     embed.set_footer(text=f"Total : {total} membres")
     return embed
+
+
+async def refresh_roster_embed(guild: discord.Guild):
+    """Retrouve le message roster existant dans salon_roster et l'édite, ou en poste un nouveau."""
+    channel = cfg_channel(guild, "salon_roster")
+    if not channel:
+        return
+    embed = build_roster_embed(guild)
+    try:
+        async for msg in channel.history(limit=20):
+            if msg.author == bot.user and msg.embeds:
+                await msg.edit(embed=embed)
+                return
+        await channel.send(embed=embed)
+    except Exception as e:
+        print(f"[ROSTER] Erreur refresh : {e}")
+
 def build_objectifs_embed(guild_id: int) -> discord.Embed:
     objectifs = db_get_objectifs(guild_id)
     embed = discord.Embed(title="🎯 Objectifs du serveur", color=0x9B59B6, timestamp=now_utc())

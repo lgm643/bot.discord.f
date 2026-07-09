@@ -8,14 +8,12 @@ _NUM_KEYS = {
     "alt_min_days", "raid_window_secs", "raid_threshold",
     "spam_limit", "spam_window",
     "vocal_inactivity_delay",
-    "rappel_vocal_heures",
 }
 _LIST_KEYS = {
     "role_staff", "faction_roles", "salon_cmds_allowed", "allowed_domains",
     "vocal_inactivity_exempt_channels",
     "vocal_inactivity_exempt_roles",
     "vocal_inactivity_exempt_users",
-    "rappel_vocal_roles",
 }
 
 CONFIG_GROUPS = {
@@ -23,6 +21,7 @@ CONFIG_GROUPS = {
         ("salon_logs",           "📜 Logs de modération",               False),
         ("salon_bienvenue",      "👋 Salon de bienvenue",                False),
         ("salon_roster",         "📋 Roster faction",                   False),
+        ("salon_indispos",       "🚫 Indisponibilités",                 False),
         ("salon_catalogue",      "🏪 Catalogue marché",                 False),
         ("salon_commandes",      "🛒 Commandes marché",                 False),
         ("salon_notifications",  "🔔 Notifications marché",             False),
@@ -90,12 +89,6 @@ CONFIG_GROUPS = {
         ("vocal_inactivity_exempt_channels", "🔕 Salons vocaux exclus (liste)",               True),
         ("vocal_inactivity_exempt_roles",    "🛡️ Rôles exclus (liste)",                      True),
         ("vocal_inactivity_exempt_users",    "👤 Membres exclus — IDs (liste)",               True),
-    ],
-    "🔔 Rappel Vocal": [
-        ("rappel_vocal_enabled", "🔘 Activer (1=oui / 0=non)",                       False),
-        ("rappel_vocal_heures",  "⏱️ Délai avant rappel (heures)",                   False),
-        ("rappel_vocal_roles",   "🎭 Rôles concernés (liste, vide = faction_roles)", True),
-        ("salon_rappel_vocal",   "📢 Salon de mention si MP fermés",                 False),
     ],
     "📜 Salons de logs": [
         ("salon_logs",           "📜 Logs modération (défaut fallback)", False),

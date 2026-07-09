@@ -43,17 +43,9 @@ async def roster(ctx):
     channel = cfg_channel(ctx.guild, "salon_roster")
     if not channel:
         await ctx.send("❌ Salon roster introuvable.", delete_after=5); return
-    embed = build_roster_embed(ctx.guild)
-    existing = None
-    async for msg in channel.history(limit=20):
-        if msg.author == bot.user and msg.embeds:
-            existing = msg; break
-    if existing:
-        await existing.edit(embed=embed)
-        await ctx.send("✅ Roster mis à jour !", delete_after=5)
-    else:
-        await channel.send(embed=embed)
-        await ctx.send(f"✅ Roster posté dans {channel.mention} !", delete_after=5)
+    from bot.utils.embeds import refresh_roster_embed
+    await refresh_roster_embed(ctx.guild)
+    await ctx.send("✅ Roster mis à jour !", delete_after=5)
 
 # ═══════════════════════════════════════════════════════════════
 #  MODÉRATION

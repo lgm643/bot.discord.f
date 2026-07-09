@@ -393,28 +393,18 @@ async def on_guild_channel_pins_update(channel: discord.TextChannel, last_pin):
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
     from bot.utils.config import load_config, cfg_channel
-    from bot.utils.embeds import build_roster_embed
+    from bot.utils.embeds import build_roster_embed, refresh_roster_embed
 
     cfg = load_config(after.guild.id)
 
-    # Mise à jour roster si rôle faction change
-    roster_cfg   = cfg.get("roster_roles", [])
-    roster_names = {entry["nom"].lower() for entry in roster_cfg}
+    # Mise à jour roster si rôle faction (roster) change — clés role_roster_*
+    ROSTER_KEYS  = ["role_roster_leader", "role_roster_officier", "role_roster_confiance",
+                    "role_roster_plus", "role_roster_membre", "role_roster_recrue"]
+    roster_names = {cfg[k].lower() for k in ROSTER_KEYS if cfg.get(k)}
     before_r = {r.name.lower() for r in before.roles if r.name.lower() in roster_names}
     after_r  = {r.name.lower() for r in after.roles  if r.name.lower() in roster_names}
     if before_r != after_r:
-        ch = cfg_channel(after.guild, "salon_roster")
-        if ch:
-            try:
-                embed = build_roster_embed(after.guild)
-                async for msg in ch.history(limit=20):
-                    if msg.author == bot.user and msg.embeds:
-                        await msg.edit(embed=embed)
-                        break
-                else:
-                    await ch.send(embed=embed)
-            except Exception:
-                pass
+        await refresh_roster_embed(after.guild)
 
     # Rôles ajoutés / retirés
     added   = set(after.roles)  - set(before.roles)
@@ -512,8 +502,6 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     # ── Inactivité vocale ─────────────────────────────────────────
     if after.channel is not None:
         record_voice_activity(gid, uid)
-        from bot.utils.voice_reminder import touch_voice_join
-        touch_voice_join(gid, uid)
     else:
         clear_voice_activity(gid, uid)
 

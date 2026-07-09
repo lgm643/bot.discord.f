@@ -17,6 +17,7 @@ import discord
 import bot.core as _core
 from bot.core import bot, active_giveaways, USER_DATA_FLUSH_INTERVAL
 from bot.views.ticket_view import TicketView, RelanceRecruteurView
+from bot.commands.indispo import IndispoPromptView
 from bot.views.market_view import (
     RoleToggleView, CatalogueView, _CataloguePersoView, CommandeView,
 )
@@ -37,18 +38,21 @@ async def _restore_active_giveaway_views():
     from bot.commands.giveaway import _end_giveaway
 
     for msg_id, gw in list(active_giveaways.items()):
+        # Restaurer la vue interactive
         try:
             bot.add_view(GiveawayView(msg_id))
             print(f"[GIVEAWAY] Vue restaurée pour msg_id={msg_id}")
         except Exception as e:
             print(f"[GIVEAWAY] Erreur restauration vue msg_id={msg_id} : {e}")
 
+        # Replanifier le timer de fin
         ends_at   = gw.get("ends_at", 0)
         remaining = ends_at - time.time()
         channel_id = gw.get("channel_id")
         reward     = gw.get("reward", "?")
 
         if remaining <= 0:
+            # Le giveaway aurait déjà dû se terminer — le clore immédiatement
             remaining = 1
 
         channel = None
@@ -72,7 +76,7 @@ async def _flush_user_data_loop():
     while not bot.is_closed():
         await asyncio.sleep(USER_DATA_FLUSH_INTERVAL)
         try:
-            await flush_user_data_all()
+            await flush_user_data_all()   # [1] await obligatoire
         except Exception as e:
             print(f"[FLUSH] Erreur : {e}")
 
@@ -82,12 +86,14 @@ async def on_ready():
     print(f"[BOT] Connecté : {bot.user} (ID: {bot.user.id})")
     print(f"[BOT] Serveurs : {[g.name for g in bot.guilds]}")
 
+    # Vues persistantes — chaque add_view est isolé pour ne pas bloquer le démarrage
     for view_cls, kwargs in [
         (TicketView,   {}),
         (RoleToggleView, {}),
         (VendeurView,  {}),
         (ObjectifView, {"guild_id": 0}),
         (CatalogueView, {}),
+        (IndispoPromptView, {}),
     ]:
         try:
             bot.add_view(view_cls(**kwargs))
@@ -109,6 +115,7 @@ async def on_ready():
     except Exception as e:
         print(f"[READY] Erreur add_view VenduView : {e}")
 
+    # Restaure les boutons ✅/❌ sur les tickets vendeur encore ouverts après un redémarrage
     for guild in bot.guilds:
         for channel in guild.text_channels:
             topic = getattr(channel, "topic", None) or ""
@@ -135,6 +142,7 @@ async def on_ready():
         from bot.events.restore import _restore_all_giveaways
         await _restore_all_giveaways()
 
+        # [2] Restaure vues ET timers des giveaways actifs
         await _restore_active_giveaway_views()
 
         for guild in bot.guilds:
@@ -157,8 +165,8 @@ async def on_ready():
         from bot.utils.ticket_relance import ticket_relance_loop
         asyncio.create_task(ticket_relance_loop(bot))
 
-        from bot.utils.voice_reminder import voice_reminder_loop
-        asyncio.create_task(voice_reminder_loop(bot))
+        from bot.utils.indispo_loop import indispo_expiration_loop
+        asyncio.create_task(indispo_expiration_loop(bot))
 
         try:
             bot.add_view(RelanceRecruteurView())
