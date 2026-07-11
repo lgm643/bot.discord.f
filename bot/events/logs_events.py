@@ -392,17 +392,28 @@ async def on_guild_channel_pins_update(channel: discord.TextChannel, last_pin):
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-    from bot.utils.config import load_config, cfg_channel
+    from bot.utils.config import load_config, cfg_channel, resolve_role
     from bot.utils.embeds import build_roster_embed, refresh_roster_embed
 
     cfg = load_config(after.guild.id)
 
     # Mise à jour roster si rôle faction (roster) change — clés role_roster_*
+    # CORRECTIF : on compare désormais par ID de rôle résolu (via resolve_role),
+    # et non par nom en texte brut — la config peut contenir un ID ou un nom,
+    # et une comparaison de noms cassait dès que la config stockait un ID
+    # (le roster ne se mettait alors jamais à jour automatiquement).
     ROSTER_KEYS  = ["role_roster_leader", "role_roster_officier", "role_roster_confiance",
                     "role_roster_plus", "role_roster_membre", "role_roster_recrue"]
-    roster_names = {cfg[k].lower() for k in ROSTER_KEYS if cfg.get(k)}
-    before_r = {r.name.lower() for r in before.roles if r.name.lower() in roster_names}
-    after_r  = {r.name.lower() for r in after.roles  if r.name.lower() in roster_names}
+    roster_role_ids = set()
+    for k in ROSTER_KEYS:
+        val = cfg.get(k)
+        if not val:
+            continue
+        role = resolve_role(after.guild, val)
+        if role:
+            roster_role_ids.add(role.id)
+    before_r = {r.id for r in before.roles if r.id in roster_role_ids}
+    after_r  = {r.id for r in after.roles  if r.id in roster_role_ids}
     if before_r != after_r:
         await refresh_roster_embed(after.guild)
 
@@ -475,6 +486,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
     import time as _time
     from bot.utils.voice_inactivity import record_voice_activity, clear_voice_activity
+    from bot.utils.voice_reminder import touch_voice_join
     from bot.utils.helpers import load_user_data, get_user, save_user_data
     from bot.utils.stats import record_voice_end
 
@@ -504,6 +516,10 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         record_voice_activity(gid, uid)
     else:
         clear_voice_activity(gid, uid)
+
+    # ── Rappel vocal (reset du compteur dès qu'on rejoint/change de salon) ──
+    if after.channel is not None:
+        touch_voice_join(gid, uid)
 
     # ── Logs vocaux ───────────────────────────────────────────────
     if before.channel is None and after.channel is not None:

@@ -92,6 +92,11 @@ DEFAULT_CONFIG = {
     "vocal_inactivity_exempt_roles":     [],     # Rôles exclus (IDs ou noms)
     "vocal_inactivity_exempt_users":     [],     # Membres exclus (IDs)
     "salon_logs_vocal_inactivity":       "",     # Salon logs dédié (vide = salon_logs)
+    # ── Rappel vocal (MP après X heures sans vocal) ────────────────────────────
+    "rappel_vocal_enabled":              False,
+    "rappel_vocal_heures":               12,     # Délai en heures avant rappel
+    "rappel_vocal_roles":                [],     # Rôles suivis (vide = faction_roles)
+    "salon_rappel_vocal":                "",     # Salon de secours si MP fermés
     # ── Emojis custom ────────────────────────────────────────────────────────
     "emojis": {},          # ex: {"market": "<:boutique:123>", "giveaway": "<:cadeau:456>"}
     # ── Tickets ─────────────────────────────────────────────────────────────

@@ -21,13 +21,23 @@ async def on_member_remove(member):
 
     # Roster : si le membre parti avait un rôle roster, on rafraîchit l'embed
     try:
-        from bot.utils.config import load_config
+        from bot.utils.config import load_config, resolve_role
         from bot.utils.embeds import refresh_roster_embed
         cfg = load_config(member.guild.id)
         ROSTER_KEYS  = ["role_roster_leader", "role_roster_officier", "role_roster_confiance",
                         "role_roster_plus", "role_roster_membre", "role_roster_recrue"]
-        roster_names = {cfg[k].lower() for k in ROSTER_KEYS if cfg.get(k)}
-        if any(r.name.lower() in roster_names for r in member.roles):
+        # CORRECTIF : comparaison par ID de rôle résolu (cf. logs_events.py)
+        # au lieu d'une comparaison de noms qui ne matchait jamais si la
+        # config stockait un ID de rôle.
+        roster_role_ids = set()
+        for k in ROSTER_KEYS:
+            val = cfg.get(k)
+            if not val:
+                continue
+            role = resolve_role(member.guild, val)
+            if role:
+                roster_role_ids.add(role.id)
+        if any(r.id in roster_role_ids for r in member.roles):
             await refresh_roster_embed(member.guild)
     except Exception as e:
         print(f"[ROSTER] Erreur refresh après leave : {e}")

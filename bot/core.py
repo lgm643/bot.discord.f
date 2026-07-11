@@ -63,7 +63,7 @@ EXEMPT_COMMANDS = {
     "ticket", "tickets", "support", "fermer", "close", "closeticket", "fermeticket",
     "stock", "recherche",
     "info", "profil", "profile", "p", "whois", "user", "membre",
-    "help", "aide", "commandes", "setup", "config",
+    "help", "aide", "commandes", "setup", "config", "sync",
     "gestion", "objectif", "vendu", "cataloguesuppall", "catalogueview",
     "invite", "topinvites", "vendeur", "accepter", "refuser",
     "statsserveur", "stats", "statistiques", "serverstats",

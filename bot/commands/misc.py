@@ -60,3 +60,15 @@ async def setup_cmd(ctx):
         description="Utilisez `!config` pour ouvrir le **panneau de configuration interactif** complet.",
         color=0x9B59B6
     ), delete_after=10)
+
+
+@bot.hybrid_command(name="sync")
+async def sync_cmd(ctx):
+    """Force la resynchronisation immédiate des commandes / sur ce serveur (admin uniquement)."""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Réservé aux administrateurs.", delete_after=5); return
+    try:
+        synced = await bot.tree.sync(guild=ctx.guild)
+        await ctx.send(f"✅ **{len(synced)}** commande(s) `/` synchronisée(s) instantanément sur ce serveur.")
+    except Exception as e:
+        await ctx.send(f"❌ Erreur pendant la synchronisation : `{e}`")

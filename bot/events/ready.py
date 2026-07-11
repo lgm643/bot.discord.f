@@ -162,6 +162,9 @@ async def on_ready():
         from bot.utils.voice_inactivity import voice_inactivity_loop
         asyncio.create_task(voice_inactivity_loop(bot))
 
+        from bot.utils.voice_reminder import voice_reminder_loop
+        asyncio.create_task(voice_reminder_loop(bot))
+
         from bot.utils.ticket_relance import ticket_relance_loop
         asyncio.create_task(ticket_relance_loop(bot))
 
@@ -174,12 +177,24 @@ async def on_ready():
             print(f"[READY] Erreur add_view RelanceRecruteurView : {e}")
 
         # Sync des slash commands (ex: /recherche avec autocomplete) — une fois par démarrage.
-        # La propagation peut prendre jusqu'à 1h en sync globale ; c'est normal.
+        # CORRECTIF : en plus du sync global (qui peut prendre jusqu'à 1h pour
+        # apparaître partout), on fait aussi un sync direct par serveur déjà
+        # connu — ça rend les commandes / disponibles instantanément dessus.
+        # Si le bot n'a pas été invité avec le scope OAuth2 "applications.commands",
+        # aucune commande / n'apparaîtra jamais, peu importe le sync : il faut
+        # alors régénérer le lien d'invitation en cochant bot + applications.commands.
         try:
             synced = await bot.tree.sync()
-            print(f"[READY] {len(synced)} slash command(s) synchronisée(s)")
+            print(f"[READY] {len(synced)} slash command(s) synchronisée(s) globalement")
         except Exception as e:
-            print(f"[READY] Erreur sync slash commands : {e}")
+            print(f"[READY] Erreur sync global slash commands : {e}")
+
+        for guild in bot.guilds:
+            try:
+                synced_guild = await bot.tree.sync(guild=guild)
+                print(f"[READY] {len(synced_guild)} slash command(s) synchronisée(s) instantanément sur {guild.name}")
+            except Exception as e:
+                print(f"[READY] Erreur sync slash commands sur {guild.name} : {e}")
 
         print("[BOT] Prêt !")
     else:
