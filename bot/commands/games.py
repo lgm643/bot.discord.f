@@ -151,6 +151,13 @@ async def _pendu_timeout_task(guild_id: int, channel_id: int):
 
 @bot.hybrid_command(name="pendu")
 async def pendu_cmd(ctx):
+    # CORRECTIF : en /pendu (slash), Discord exige une réponse à l'interaction
+    # dans les 3 secondes. Comme cette commande attend jusqu'à 30s une
+    # réponse en DM avant son premier ctx.send(), le token d'interaction
+    # expirait entre-temps → "Unknown interaction" (404 / code 10062).
+    # defer() accuse réception tout de suite (no-op en préfixe !pendu).
+    await ctx.defer()
+
     gid = ctx.guild.id
     if gid in _pendu_games:
         await ctx.send(
