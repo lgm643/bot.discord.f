@@ -35,6 +35,9 @@ _last_activity:       dict[int, dict[int, float]] = {}
 # Membres en cours de déconnexion (anti double-expulsion)
 _pending_disconnect:  dict[int, set[int]]          = {}
 
+# Anti-spam pour les avertissements de hiérarchie de rôles (1 par membre / 10 min)
+_hierarchy_warned:    dict[int, dict[int, float]]  = {}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -57,6 +60,36 @@ def _is_active(member: discord.Member) -> bool:
     if not vs.self_mute and not vs.self_deaf and not vs.suppress:
         return True
     return False
+
+
+def _bot_can_move(guild: discord.Guild, member: discord.Member) -> bool:
+    """
+    Vérifie la hiérarchie des rôles : Discord refuse de déconnecter un membre
+    dont le rôle le plus haut est égal ou supérieur à celui du bot, même si
+    la permission 'move_members' est cochée. C'est la cause n°1 pour laquelle
+    certains membres (souvent Officier/Leader, placés au-dessus du bot dans
+    la liste des rôles) ne se font jamais expulser.
+    """
+    bot_member = guild.me
+    if member.id == guild.owner_id:
+        return False
+    return bot_member.top_role > member.top_role
+
+
+def _build_hierarchy_warning_embed(member: discord.Member) -> discord.Embed:
+    embed = discord.Embed(
+        title="⚠️ Expulsion vocale impossible — hiérarchie des rôles",
+        description=(
+            f"{member.mention} aurait dû être expulsé pour inactivité vocale, "
+            f"mais le rôle du bot est **en dessous** du rôle le plus haut de ce membre.\n\n"
+            f"**Correction à faire** (une seule fois) : dans *Paramètres du serveur → Rôles*, "
+            f"fais glisser le rôle du bot **au-dessus** de tous les rôles qui doivent pouvoir "
+            f"être expulsés (Officier, Leader, etc.)."
+        ),
+        color=0xE67E22,
+    )
+    embed.set_footer(text=f"ID : VOCAL-INACT-HIERARCHY-{member.id}")
+    return embed
 
 
 def _get_delay_seconds(cfg: dict) -> float:
@@ -253,6 +286,25 @@ async def _check_all_guilds(bot: discord.Client):
                     )
                     continue
 
+                # Vérifier la hiérarchie des rôles — sinon Discord refuse
+                # silencieusement de déconnecter le membre (cas fréquent pour
+                # les Officiers/Leaders placés au-dessus du bot).
+                if not _bot_can_move(guild, member):
+                    last_warn = _hierarchy_warned.setdefault(gid, {}).get(mid, 0)
+                    if now - last_warn > 600:  # 1 avertissement / 10 min / membre
+                        _hierarchy_warned[gid][mid] = now
+                        log_ch = await _get_inactivity_log_channel(guild, cfg)
+                        if log_ch:
+                            try:
+                                await log_ch.send(embed=_build_hierarchy_warning_embed(member))
+                            except Exception:
+                                pass
+                        print(
+                            f"[VOCAL-INACT] ⚠️ Rôle du bot trop bas pour expulser {member} "
+                            f"(guild={guild.id}) — corrige l'ordre des rôles."
+                        )
+                    continue
+
                 # Marquer comme en cours de déconnexion
                 _pending_disconnect[gid].add(mid)
 
@@ -293,6 +345,13 @@ async def _disconnect_inactive_member(
 
     except discord.Forbidden:
         print(f"[VOCAL-INACT] ⚠️ Permission refusée pour déconnecter {member} de {channel.name}")
+        try:
+            cfg    = load_config(guild.id)
+            log_ch = await _get_inactivity_log_channel(guild, cfg)
+            if log_ch:
+                await log_ch.send(embed=_build_hierarchy_warning_embed(member))
+        except Exception:
+            pass
     except discord.HTTPException as e:
         print(f"[VOCAL-INACT] Erreur HTTP lors de la déconnexion de {member} : {e}")
     except Exception as e:
